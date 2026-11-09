@@ -294,6 +294,36 @@ describe("AcpRuntimeModel", () => {
         command: "bun run typecheck",
       });
     }
+    const search = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "search-1",
+        title: "Search filterEntries",
+        kind: "search",
+        status: "in_progress",
+        rawInput: { pattern: "filterEntries", path: "src" },
+      },
+    } satisfies EffectAcpSchema.SessionNotification).events[0];
+    const searchResult = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "search-1",
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "text", text: "src/filter.ts:1:filterEntries" } },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification).events[0];
+    if (search?._tag !== "ToolCallUpdated" || searchResult?._tag !== "ToolCallUpdated")
+      throw new Error("Expected search tool updates");
+    expect(mergeToolCallState(search.toolCall, searchResult.toolCall)).toMatchObject({
+      kind: "search",
+      title: "Searched filterEntries in src",
+      status: "completed",
+      data: { rawInput: { pattern: "filterEntries", path: "src" } },
+    });
   });
 
   it("ends a tool call that ACP reports as cancelled", () => {
