@@ -943,7 +943,19 @@ export function mergeToolCallState(
 ): AcpToolCallState {
   const nextKind = next.kind ?? (typeof next.data.kind === "string" ? next.data.kind : undefined);
   const kind = next.data.kind === null ? nextKind : (nextKind ?? previous?.kind);
-  const title = next.data.title === null ? next.title : (next.title ?? previous?.title);
+  // Result-only updates can carry a synthesized fallback title.
+  const updatesIdentity =
+    next.data.title !== undefined ||
+    next.data.rawInput != null ||
+    next.data.locations !== undefined ||
+    next.command !== undefined ||
+    (nextKind !== undefined && nextKind !== previous?.kind);
+  const title =
+    next.data.title === null
+      ? next.title
+      : updatesIdentity
+        ? (next.title ?? previous?.title)
+        : (previous?.title ?? next.title);
   const status = next.data.status === null ? next.status : (next.status ?? previous?.status);
   const command = next.command ?? previous?.command;
   const detail = next.detail ?? previous?.detail;
