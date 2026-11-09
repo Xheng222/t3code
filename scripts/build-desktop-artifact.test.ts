@@ -716,7 +716,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it.effect("ships Cursor platform assets outside asar for spawning and native loading", () =>
+  it.effect("ships platform helpers outside asar for spawning and native loading", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -762,6 +762,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             WINDOWS_SERVER_ASAR_IGNORE_GLOBS.some((glob) =>
               NodePath.matchesGlob(packagedPath, glob),
             ),
+          );
+        }
+        for (const source of ["resources", "prod-resources"]) {
+          const monitor = `apps/desktop/${source}/resource-monitor/t3-resource-monitor.exe`;
+          assert.isTrue(
+            DESKTOP_FILE_EXCLUSIONS.some((glob) => NodePath.matchesGlob(monitor, glob.slice(1))),
+            monitor,
           );
         }
       }),
@@ -1416,6 +1423,29 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.isAbove(error.fileCount ?? 0, 2);
       }),
     ),
+  );
+
+  it.effect("leaves the server compile cache out of the file-count budget", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const validate = validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+        });
+        const { fileCount } = yield* validate;
+        const cache = path.join(fixture.packagedAppDir, "resources", "server-compile-cache");
+        yield* fs.makeDirectory(cache, { recursive: true });
+        for (const file of ["manifest.json", "0a1b2c3d", "4e5f6a7b"]) {
+          yield* fs.writeFileString(path.join(cache, file), "");
+        }
+        assert.equal((yield* validate).fileCount, fileCount);
+      }),
+    ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("rejects a sidecar whose extracted server bundle cannot resolve", () =>

@@ -999,6 +999,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/browser-secret/**/*",
   "!apps/desktop/prod-resources/apple-speech",
   "!apps/desktop/prod-resources/apple-speech/**/*",
+  "!apps/desktop/resources/resource-monitor",
+  "!apps/desktop/resources/resource-monitor/**/*",
+  "!apps/desktop/prod-resources/resource-monitor",
+  "!apps/desktop/prod-resources/resource-monitor/**/*",
   "!apps/desktop/prod-resources/windows-server",
   "!apps/desktop/prod-resources/windows-server/**/*",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
@@ -3248,6 +3252,9 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const pendingDirectories = [root];
+  // A Windows host adds the server compile cache, one file per startup chunk, outside
+  // upstream's Linux-built budget.
+  const compileCache = path.join(root, "resources", "server-compile-cache");
   let count = 0;
 
   while (pendingDirectories.length > 0) {
@@ -3258,7 +3265,7 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
       const entryPath = path.join(directory, entry);
       const stat = yield* fs.stat(entryPath);
       if (stat.type === "Directory") {
-        pendingDirectories.push(entryPath);
+        if (entryPath !== compileCache) pendingDirectories.push(entryPath);
       } else if (stat.type === "File") {
         count += 1;
       }
