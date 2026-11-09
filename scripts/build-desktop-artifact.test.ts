@@ -686,7 +686,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it.effect("ships Cursor platform assets outside asar for spawning and native loading", () =>
+  it.effect("ships platform helpers outside asar for spawning and native loading", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -732,6 +732,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             WINDOWS_SERVER_ASAR_IGNORE_GLOBS.some((glob) =>
               NodePath.matchesGlob(packagedPath, glob),
             ),
+          );
+        }
+        for (const source of ["resources", "prod-resources"]) {
+          const monitor = `apps/desktop/${source}/resource-monitor/t3-resource-monitor.exe`;
+          assert.isTrue(
+            DESKTOP_FILE_EXCLUSIONS.some((glob) => NodePath.matchesGlob(monitor, glob.slice(1))),
+            monitor,
           );
         }
       }),
