@@ -204,8 +204,12 @@ function normalizeReplayFrame(value: unknown): unknown {
   ) {
     const params = { ...(normalized.params as Record<string, unknown>) };
     // Older recordings used `never` for full access, before MCP prompts were kept interactive.
+    // The fork's Full access sends `on-request` with the unrestricted sandbox.
     if (
       params.approvalPolicy === "never" ||
+      (params.approvalPolicy === "on-request" &&
+        (params.sandboxPolicy as { type?: unknown } | null | undefined)?.type ===
+          "dangerFullAccess") ||
       stableStringify(params.approvalPolicy) ===
         stableStringify({
           granular: {

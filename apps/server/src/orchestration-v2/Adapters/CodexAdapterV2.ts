@@ -672,6 +672,11 @@ function permissionsResponseFromDecision(input: {
   };
 }
 
+/** T3's own Full access, not an explicit Codex approval policy that asks. */
+function codexAcceptsApprovals(policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) {
+  return policy.runtimeMode === "full-access" && policy.approvalPolicy === undefined;
+}
+
 function answerValueToStrings(value: unknown): ReadonlyArray<string> {
   if (Array.isArray(value)) {
     return value.map((item) => String(item));
@@ -780,16 +785,8 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
       };
     case "full-access":
       return {
-        // `never` also rejects browser and app access prompts before the client sees them.
-        approvalPolicy: {
-          granular: {
-            mcp_elicitations: true,
-            request_permissions: false,
-            rules: false,
-            sandbox_approval: false,
-            skill_approval: false,
-          },
-        },
+        // `never` makes Codex refuse rule, skill, and permission prompts; the handlers accept them.
+        approvalPolicy: "on-request",
         approvalsReviewer: "user",
         sandboxPolicy: {
           type: "dangerFullAccess",
@@ -5987,6 +5984,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (codexAcceptsApprovals(context.input.runtimePolicy)) {
+              return {
+                decision: "accept",
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+            }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {
@@ -6057,6 +6059,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for file change approval turn ${payload.turnId}.`,
                 payload,
               );
+            }
+            if (codexAcceptsApprovals(context.input.runtimePolicy)) {
+              return { decision: "accept" } satisfies CodexSchema.FileChangeRequestApprovalResponse;
             }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("file-change")) {
@@ -6129,6 +6134,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for permissions approval turn ${payload.turnId}.`,
                 payload,
               );
+            }
+
+            if (codexAcceptsApprovals(context.input.runtimePolicy)) {
+              return permissionsResponseFromDecision({
+                decision: "accept",
+                permissions: payload.permissions,
+              });
             }
 
             const requestKind = providerRequestKindFromPermissions(payload.permissions);
@@ -6275,6 +6287,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (codexAcceptsApprovals(context.input.runtimePolicy)) {
+              return { decision: "approved" } satisfies CodexSchema.ExecCommandApprovalResponse;
+            }
             const allowance = sessionAllowance(payload.conversationId, context);
             if (allowance.has("command")) {
               return {
@@ -6343,6 +6358,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for apply patch approval thread ${payload.conversationId}.`,
                 payload,
               );
+            }
+            if (codexAcceptsApprovals(context.input.runtimePolicy)) {
+              return { decision: "approved" } satisfies CodexSchema.ApplyPatchApprovalResponse;
             }
             const allowance = sessionAllowance(payload.conversationId, context);
             if (allowance.has("file-change")) {
