@@ -225,15 +225,7 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(auto.approvalPolicy, "on-request");
       assert.equal(auto.approvalsReviewer, "auto_review");
       assert.equal(auto.sandboxPolicy?.type, "workspaceWrite");
-      assert.deepEqual(fullAccess.approvalPolicy, {
-        granular: {
-          mcp_elicitations: true,
-          request_permissions: false,
-          rules: false,
-          sandbox_approval: false,
-          skill_approval: false,
-        },
-      });
+      assert.equal(fullAccess.approvalPolicy, "on-request");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
     }),
@@ -763,7 +755,7 @@ function codexReplayPreamble(input: {
           input: [{ type: "text", text: input.sentPrompt ?? input.prompt }],
           cwd: "/workspace",
           model: "gpt-5.4",
-          approvalPolicy: "never",
+          approvalPolicy: "on-request",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
           ...input.turnPolicy,
@@ -3132,7 +3124,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           sandboxPolicy: { type: "readOnly" },
         },
         "full-access": {
-          approvalPolicy: "never",
+          approvalPolicy: "on-request",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
         },
@@ -4280,7 +4272,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   input: [],
                   cwd: "/workspace",
                   model: "gpt-5.4",
-                  approvalPolicy: "never",
+                  approvalPolicy: "on-request",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
                   summary: "auto",
@@ -8996,7 +8988,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 input: [],
                 cwd: "/workspace",
                 model: "gpt-5.4",
-                approvalPolicy: "never",
+                approvalPolicy: "on-request",
                 approvalsReviewer: "user",
                 sandboxPolicy: { type: "dangerFullAccess" },
                 summary: "auto",
@@ -9142,7 +9134,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   input: [],
                   cwd: "/workspace",
                   model: "gpt-5.4",
-                  approvalPolicy: "never",
+                  approvalPolicy: "on-request",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
                   summary: "auto",
