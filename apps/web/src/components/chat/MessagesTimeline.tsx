@@ -26,7 +26,14 @@ import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/s
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
-import { useForkTimeline, useForkTimelinePresentation } from "./MessagesTimeline.fork";
+import {
+  forkTimelineItemType,
+  useForkTimeline,
+  useForkTimelinePresentation,
+} from "./MessagesTimeline.fork";
+import { processAnswerPreview } from "./MessagesTimeline.logic.fork";
+import { isForkTimelineRow, renderForkTimelineRow } from "./MessagesTimeline.rows.fork";
+import { type ForkWorkGroupViewState } from "./timelineRowContext.fork";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const EMPTY_PENDING_APPROVALS: ReadonlyArray<PendingApproval> = [];
@@ -89,7 +96,6 @@ import {
   resolveTimelineMinimapHitStripWidth,
   TIMELINE_MINIMAP_TARGET_OFFSET,
   timelineTurnFoldRunIdsByEntryId,
-  liveAnswerPreview,
   type MessagesTimelineRow,
   type TimelineLatestRun,
 } from "./MessagesTimeline.logic";
@@ -111,7 +117,6 @@ import {
   type TimelineRowActivityState,
   TimelineRowCtx,
   TimelineRowActivityCtx,
-  type WorkGroupViewState,
   type TimelineRow,
 } from "./timelineRowContext";
 import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
@@ -148,7 +153,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 function timelineListStateFor(identity: string): {
   readonly identity: string;
   readonly rememberedPosition: RememberedTimelinePosition | undefined;
-  readonly workGroupViewState: WorkGroupViewState;
+  readonly workGroupViewState: ForkWorkGroupViewState;
 } {
   const rememberedPosition = readTimelinePosition(identity);
   return {
@@ -157,6 +162,7 @@ function timelineListStateFor(identity: string): {
     workGroupViewState: rememberedPosition?.disclosures?.workGroupState ?? {
       scrollPositions: new Map(),
       expandedEntries: new Set(),
+      expandedPreviewRuns: new Set(),
     },
   };
 }
@@ -311,6 +317,11 @@ interface MessagesTimelineProps {
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
+  /**
+   * False while the entries are a copy held from before the thread's detail synced. The
+   * visit's history starts from the first synced entries.
+   */
+  synced?: boolean;
   contentInsetEndAdjustment: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   /** Disable while reading history to prevent LegendList re-pinning near the bottom. */
@@ -412,6 +423,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
+  synced = true,
   contentInsetEndAdjustment,
   onIsAtEndChange,
   liveFollowEnabled,
@@ -424,9 +436,29 @@ const ConversationTimeline = memo(function ConversationTimeline({
 }: MessagesTimelineProps) {
   const gt = useGT();
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
+  const viewportRef = useRef<TimelineViewport | null>(null);
+  const navigateTimeline = () => viewportRef.current?.navigate({ releasesFollow: true });
+  const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const {
+    target: citationTarget,
+    positioning: citationPositioning,
+    onListLoad: onCitationListLoad,
+  } = useAssistantCitationTarget({
+    request: citationRequest,
+    failed: citationHistory._tag === "failed",
+    viewport: timelineViewportElement,
+    onManualNavigation: navigateTimeline,
+  });
   const forkPresentation = useForkTimelinePresentation({
     identity: listIdentityKey,
     timelineEntries,
+    latestRun,
+    isWorking,
+    synced,
+    findExpanded,
+    citationPositioning,
   });
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
   // Find open at the opening is part of the snapshot: opening find later
@@ -761,8 +793,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
     worktreeSetup,
     toolCallVisibility,
     revealedMessageId,
+    ...forkPresentation.rowsInput,
   });
-  const [rows, fork] = useForkTimeline(forkPresentation, rawRows);
+  const [rows, fork] = useForkTimeline(forkPresentation, rawRows, {
+    expandedWorkGroupIds: paintedExpandedWorkGroupIds,
+    setExpandedWorkGroupIds,
+    workGroupViewState,
+    activeTurnStartedAt,
+    isPreparingWorktree,
+    isCompacting,
+    awaitingUser,
+    pendingApprovals,
+  });
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
     const entries =
@@ -799,8 +841,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const nextOpening = nextListOpening(listOpening, !showsEmptyState, listIdentityKey);
   if (nextOpening !== listOpening) setListOpening(nextOpening);
   const listOpenedOn = nextOpening.mounted ? nextOpening.identity : null;
-  const viewportRef = useRef<TimelineViewport | null>(null);
-  const navigateTimeline = () => viewportRef.current?.navigate({ releasesFollow: true });
   const restoreReady = restoringThreadPosition && rows.length > 0;
   // Z: syncs LegendList's scroll position with which thread it shows. The list
   // is not keyed per thread and reports no "new data" event, and the restore
@@ -833,27 +873,16 @@ const ConversationTimeline = memo(function ConversationTimeline({
     viewportRef,
   ]);
 
-  const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
-    null,
-  );
-  const {
-    target: readyCitationRequest,
-    positioning: citationPositioning,
-    onListLoad: onCitationListLoad,
-    alwaysRender: citationAlwaysRender,
-  } = useAssistantCitationTarget({
-    request: citationRequest,
-    phase: citationRequest
-      ? resolveCitationPhase({
-          history: citationHistory,
-          messageId: citationRequest.citation.messageId,
-          entries: timelineEntries,
-          rows,
-        })
-      : null,
-    viewport: timelineViewportElement,
-    onManualNavigation: navigateTimeline,
-  });
+  const citationPhase = citationRequest
+    ? resolveCitationPhase({
+        history: citationHistory,
+        messageId: citationRequest.citation.messageId,
+        entries: timelineEntries,
+        rows,
+      })
+    : null;
+  const citedRowId = citationPhase?._tag === "ready" ? citationPhase.rowId : null;
+  const readyCitationRequest = citedRowId === null ? null : citationTarget;
   const [findListReady, setFindListReady] = useState(false);
   const handleListLoad = () => {
     onCitationListLoad();
@@ -877,7 +906,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const alwaysRenderKeys = [
     ...(firstMessageRow ? [firstMessageRow.id] : []),
     ...(lastMessageRow && lastMessageRow !== firstMessageRow ? [lastMessageRow.id] : []),
-    ...(citationAlwaysRender?.keys ?? []),
+    ...(readyCitationRequest && citedRowId !== null && citationPositioning ? [citedRowId] : []),
     ...(fullscreenAppRowId === null ? [] : [fullscreenAppRowId]),
     ...new Set(
       [...playingAudioRows].filter(([audio]) => audio.isConnected).map(([, rowId]) => rowId),
@@ -1188,7 +1217,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     providerStartingLabel,
     latestRunId: latestRun?.runId ?? null,
     liveAnswerPreview:
-      isWorking && toolCallVisibility === "zen" ? liveAnswerPreview(timelineEntries) : null,
+      isWorking && toolCallVisibility === "zen" ? processAnswerPreview(timelineEntries) : null,
   };
   // Mounted in both the empty and filled timeline so a thread's first turn
   // starts from a baseline instead of a fresh, silent region.
@@ -1624,6 +1653,8 @@ function keyExtractor(item: MessagesTimelineRow) {
 // LegendList estimates unmeasured rows from their type's average. Long messages of equal length
 // can differ in height by orders of magnitude, so each gets its own type to avoid nested-update loops.
 function getItemType(item: MessagesTimelineRow) {
+  const forkType = forkTimelineItemType(item);
+  if (forkType !== undefined) return forkType;
   if (item.kind !== "message") return item.kind;
   const lengthBucket = Math.max(0, Math.floor(Math.log2(item.message.text.length / 1000)));
   return lengthBucket < 2
@@ -1632,6 +1663,7 @@ function getItemType(item: MessagesTimelineRow) {
 }
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  if (isForkTimelineRow(row)) return renderForkTimelineRow(row);
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
