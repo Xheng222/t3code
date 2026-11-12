@@ -80,7 +80,7 @@ export function FileSearchResults(props: {
   const gt = useGT();
   const matchers = patternMatchers(props.pattern);
   return (
-    <div className="max-h-96 divide-y divide-border/60 overflow-y-auto rounded-md border border-border/70 bg-muted/45 font-mono text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text">
+    <div className="divide-y divide-border/60 rounded-md border border-border/70 bg-muted/45 font-mono text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text">
       {groupFileSearchResults(props.results).map((group) => {
         const lines = group.results.filter((result) => result.line !== undefined);
         const notes = group.results.flatMap((result) =>
