@@ -1,6 +1,6 @@
 import { toHtml } from "hast-util-to-html";
 import { disposeHighlighter, getSharedHighlighter } from "@pierre/diffs";
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { createIncrementalHighlightedDocument } from "./incrementalHighlighting";
 
@@ -72,6 +72,28 @@ describe.each(["shiki-wasm", "highlights"] as const)(
           highlighter.codeToHtml(text, { lang: "typescript", theme: "pierre-dark" }),
         );
       }
+      highlight.dispose();
+    });
+
+    it("keeps one tokenizer while Markdown moves its synthetic trailing newline", async () => {
+      const highlighter = await getSharedHighlighter({
+        ...highlighterOptions,
+        preferredHighlighter: engine,
+      });
+      using tokenize = vi.spyOn(highlighter, "createStreamTokenizer");
+      const highlight = createIncrementalHighlightedDocument(
+        highlighter,
+        "typescript",
+        "pierre-dark",
+        true,
+      );
+      for (let end = 0; end <= samples.typescript.length; end++) {
+        const code = samples.typescript.slice(0, end) + "\n";
+        expect(toHtml(highlight(code))).toBe(
+          highlighter.codeToHtml(code, { lang: "typescript", theme: "pierre-dark" }),
+        );
+      }
+      expect(tokenize).toHaveBeenCalledTimes(1);
       highlight.dispose();
     });
 
