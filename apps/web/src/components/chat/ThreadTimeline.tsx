@@ -56,5 +56,8 @@ export function ThreadTimeline({
     }
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  const processEntries = displayedEntries.filter(
+    (entry) => entry.kind !== "work" || entry.entry.itemType !== "todo_list",
+  );
+  return <MessagesTimeline {...timelineProps} timelineEntries={processEntries} />;
 }
