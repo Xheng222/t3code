@@ -33,6 +33,10 @@ describe("createMarkdownRenderer", () => {
     "A table without pipes\n:--",
     "> | quoted |\n> | - |\n> | body |\n\n- [ ] open\n- [X] done",
     "Escaped www\\.example.com and me&#64;example.com",
+    '~~~ts title="open.ts"\nconst a = 1;\n\n',
+    "```t&amp;s meta\\*\n\tvalue\0\n",
+    "~~~~\n~~~\n\ncode\n",
+    "~~~\nbody\n  ~~~  \ntrailing text",
     "\ufeffA byte order mark\n\n| a |\n| - |\n| b |",
     "> - | a |\r\n>   | - |\r\n>   | me@x.io |\r\n\n-\t[ ] tab\n\n  ~~lazy~~",
   ])("renders what react-markdown renders: %j", (source) => {
@@ -53,7 +57,7 @@ describe("createMarkdownRenderer", () => {
 
   it("renders what react-markdown renders while a reply streams through the incremental parser", () => {
     const reply =
-      "```ts\nconst a = 1;\n```\n\n| a | b |\n| - | - |\n| me@x.io | www.x.io |\n\nDone ~~now~~.";
+      "```ts\nconst a = 1;\n```\n\n~~~ts\nconst b = 2;\n~~~\n\n| a | b |\n| - | - |\n| me@x.io | www.x.io |\n\nDone ~~now~~.";
     // As ChatMarkdown streams: one incremental plugin for the reply, a fresh renderer per update.
     const incremental = createIncrementalMarkdownPlugin();
     for (let end = 1; end <= reply.length; end++) {
@@ -75,6 +79,30 @@ describe("createMarkdownRenderer", () => {
           </ReactMarkdown>,
         ),
       );
+    }
+  });
+
+  it("preserves every prefix of a standalone fence through closure and replacement", () => {
+    for (const source of [
+      '~~~ts title="a.ts"\n\nconst a = `x`;\n  ~~~~ \n\nDone.',
+      "````ts\n```\n\tvalue\0\n\n````\nnext",
+      "~~~\n\uFEFFcode\n\r\n~~~",
+      "```bad`info\nbody\n```",
+    ]) {
+      for (let end = 0; end <= source.length; end++) {
+        const text = source.slice(0, end);
+        expect(renderToStaticMarkup(render(text))).toBe(
+          renderToStaticMarkup(
+            <ReactMarkdown
+              remarkPlugins={CHAT_MARKDOWN_REMARK_PLUGINS}
+              rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
+              urlTransform={urlTransform}
+            >
+              {text}
+            </ReactMarkdown>,
+          ),
+        );
+      }
     }
   });
 
