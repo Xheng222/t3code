@@ -60,6 +60,8 @@ export interface TimelineViewport {
   /** Follow announces letting go, so the list can remember it is reading history. */
   readonly followReleased: () => void;
   readonly onFollowReleased: (listener: () => void) => () => void;
+  readonly layoutChanged: (animating: boolean) => void;
+  readonly onLayoutChanged: (listener: (animating: boolean) => void) => () => void;
 }
 
 const UP_KEYS = new Set(["PageUp", "Home", "ArrowUp"]);
@@ -79,6 +81,7 @@ export function attachTimelineViewport(
 } {
   const listeners = new Set<(navigation: TimelineNavigation) => void>();
   const followReleasedListeners = new Set<() => void>();
+  const layoutListeners = new Set<(animating: boolean) => void>();
   let programmaticHolds = 0;
   const emit = (navigation: TimelineNavigation) => {
     for (const listener of listeners) listener(navigation);
@@ -200,10 +203,20 @@ export function attachTimelineViewport(
       followReleasedListeners.add(listener);
       return () => followReleasedListeners.delete(listener);
     },
+    layoutChanged: (animating) => {
+      for (const listener of layoutListeners) listener(animating);
+    },
+    onLayoutChanged: (listener) => {
+      layoutListeners.add(listener);
+      return () => {
+        layoutListeners.delete(listener);
+      };
+    },
     dispose: () => {
       window.removeEventListener("message", handleFrameResize, true);
       listeners.clear();
       followReleasedListeners.clear();
+      layoutListeners.clear();
       scrollNode.removeEventListener("scroll", handleScroll);
       scrollNode.removeEventListener("wheel", handleWheel);
       scrollNode.removeEventListener("touchmove", handleTouchMove);
@@ -254,7 +267,7 @@ export type TimelineFollow =
 export type TimelineFollowEvent =
   | { readonly type: "navigated" }
   | { readonly type: "followEnd" }
-  | { readonly type: "reachedEnd" }
+  | { readonly type: "reachedEnd"; readonly rearm?: boolean }
   | { readonly type: "leftEnd" };
 
 export const FOLLOWING: TimelineFollow = { mode: "following" };
@@ -273,9 +286,12 @@ export function transitionTimelineFollow(
     case "followEnd":
       return FOLLOWING;
     case "reachedEnd":
-      // Navigating away while still at the end stays released until the list
-      // reports leaving and returning, so a scroll key at the end cannot re-arm.
-      return state.mode === "released" && !state.atEnd ? FOLLOWING : state;
+      // A disclosure can enter the end band by resizing without a scroll gesture.
+      return state.mode === "released" && !state.atEnd
+        ? event.rearm === false
+          ? { mode: "released", atEnd: true }
+          : FOLLOWING
+        : state;
     case "leftEnd":
       // While following, the list leaves the end band for a frame on every
       // streamed chunk before the follow scroll catches up.

@@ -74,7 +74,7 @@ export function createStreamingPresentation(initialText: string, initiallyVisibl
       received,
       complete: visible >= received,
     }),
-    update: (text: string, immediate = false) => {
+    update: (text: string, immediate = false, paused = false) => {
       const appended = text === source || readText(text);
       if (immediate || !appended) {
         visible = received;
@@ -82,7 +82,8 @@ export function createStreamingPresentation(initialText: string, initiallyVisibl
         speed = STREAMING_SPEED.normal;
       }
       publish();
-      if (visible < received && frame === undefined) {
+      if (paused) cancel();
+      if (!paused && visible < received && frame === undefined) {
         lastFrame = performance.now();
         frame = requestAnimationFrame(tick);
       }

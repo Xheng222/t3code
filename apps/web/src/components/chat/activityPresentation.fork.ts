@@ -144,9 +144,19 @@ type WaitingActivity = { label: string; createdAt: string | null } | null;
 
 export function deriveProcessGroupRows(rows: MessagesTimelineRow[], waiting: WaitingActivity) {
   const result: MessagesTimelineRow[] = [];
+  const statusCounts = new Map<string, number>();
   let boundary = "start";
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
+    if (row.kind === "working" || row.kind === "turn-fold") {
+      const ordinal = statusCounts.get(boundary) ?? 0;
+      statusCounts.set(boundary, ordinal + 1);
+      result.push({
+        ...row,
+        id: `turn-status:${boundary}${ordinal === 0 ? "" : `:${ordinal}`}`,
+      });
+      continue;
+    }
     if (row.kind === "work-live" || row.kind === "work-toggle") {
       const preview = rows[index + 1];
       const inline =
@@ -166,13 +176,7 @@ export function deriveProcessGroupRows(rows: MessagesTimelineRow[], waiting: Wai
       boundary = row.id;
     } else {
       result.push(row);
-      if (
-        row.kind !== "working" &&
-        row.kind !== "turn-fold" &&
-        row.kind !== "viewed-images" &&
-        !(row.kind === "work" && row.groupId)
-      )
-        boundary = row.id;
+      if (row.kind !== "viewed-images" && !(row.kind === "work" && row.groupId)) boundary = row.id;
     }
   }
   const tail = result.at(-1);

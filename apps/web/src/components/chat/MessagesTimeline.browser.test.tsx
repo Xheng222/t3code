@@ -306,19 +306,16 @@ describe("MessagesTimeline work rows", () => {
     // Keep the heading on screen so Playwright does not scroll it before clicking.
     container.style.cssText =
       "height: min(600px, 100vh); width: 900px; display: flex; flex-direction: column;";
-    await using screen = await render(
-      <MessagesTimeline
-        {...props}
-        timelineEntries={[
-          ...Array.from({ length: 12 }, (_, index) =>
-            message(`Earlier context ${index}`, {}, `context-${index}`),
-          ),
-          message("Progress details\n\n".repeat(50), { role: "assistant", runId }, "progress"),
-          message("Done", { role: "assistant", runId }, "final"),
-        ]}
-      />,
-      { container },
-    );
+    const entries = [
+      ...Array.from({ length: 12 }, (_, index) =>
+        message(`Earlier context ${index}`, {}, `context-${index}`),
+      ),
+      message("Progress details\n\n".repeat(50), { role: "assistant", runId }, "progress"),
+      message("Done", { role: "assistant", runId }, "final"),
+    ];
+    await using screen = await render(<MessagesTimeline {...props} timelineEntries={entries} />, {
+      container,
+    });
     const heading = screen.getByRole("button", { name: /^Worked for/ });
     // LegendList keeps rows click-through until its initial scroll settles on animation
     // frames, which the fake clock below would freeze.
@@ -332,9 +329,17 @@ describe("MessagesTimeline work rows", () => {
     expect(viewport.scrollTop).toBeGreaterThan(0);
     const top = heading.element().getBoundingClientRect().top;
     const height = viewport.scrollHeight;
+    const restingRowCount = props.listRef.current!.getState().data.length;
     using _timers = fakeTimers();
     await heading.click();
-    await act(() => vi.advanceTimersByTime(1000));
+    await act(() => vi.advanceTimersByTimeAsync(120));
+    const finalMessage = screen.container.querySelector('[data-message-id="final"]')!;
+    const finalIndex = props.listRef.current!.getState().indexByKey("entry-final")!;
+    const finalContainer = props.listRef.current!.getState().elementAtIndex(finalIndex)!;
+    expect(finalMessage.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      finalContainer.getBoundingClientRect().top - 1,
+    );
+    await act(() => vi.advanceTimersByTimeAsync(1000));
     await vi.waitFor(() => {
       expect(viewport.scrollHeight).toBeGreaterThan(height + 500);
       expect(heading.element().getBoundingClientRect().top).toBeCloseTo(top, 0);
@@ -342,9 +347,39 @@ describe("MessagesTimeline work rows", () => {
         500,
       );
     });
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await heading.click();
+      await act(() => vi.advanceTimersByTimeAsync(120));
+      expect(finalMessage.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        finalContainer.getBoundingClientRect().top - 1,
+      );
+      if (cycle === 0) {
+        viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+        viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
+        const readingTop = viewport.scrollTop;
+        await act(() => vi.advanceTimersByTimeAsync(16));
+        expect(viewport.scrollTop).toBeCloseTo(
+          Math.min(readingTop, viewport.scrollHeight - viewport.clientHeight),
+          0,
+        );
+      }
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await vi.waitFor(() => {
+        expect(props.listRef.current!.getState().data.length).toBe(restingRowCount);
+        expect(
+          screen.container.querySelector('[data-timeline-motion-row="entry-progress"]'),
+        ).toBeNull();
+        expect(screen.container.querySelector("[data-timeline-motion-row][inert]")).toBeNull();
+      });
+      if (cycle < 2) {
+        await heading.click();
+        await act(() => vi.advanceTimersByTimeAsync(1000));
+        await vi.waitFor(() => expect(viewport.scrollHeight).toBeGreaterThan(height + 500));
+      }
+    }
   });
 
-  it("keeps following a streaming turn after a heading is expanded at the bottom", async () => {
+  it("preserves reading position when a live turn grows after work is expanded", async () => {
     const props = { ...baseProps(), isWorking: true };
     const runId = RunId.make("live-run");
     const container = document.createElement("div");
@@ -360,13 +395,17 @@ describe("MessagesTimeline work rows", () => {
     await using screen = await render(<MessagesTimeline {...props} timelineEntries={entries} />, {
       container,
     });
+    const rows = props.listRef.current!.getState().data;
+    expect(new Set(rows.map((row: { id: string }) => row.id)).size).toBe(rows.length);
     const heading = screen.getByRole("button", { name: /^Worked for/ });
     await expect.element(heading).toHaveStyle({ pointerEvents: "auto" });
     const viewport = props.listRef.current!.getScrollableNode()!;
     const distanceFromEnd = () =>
       viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
     await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+    const top = heading.element().getBoundingClientRect().top;
     await heading.click();
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeGreaterThan(500));
     await screen.rerender(
       <MessagesTimeline
         {...props}
@@ -376,8 +415,10 @@ describe("MessagesTimeline work rows", () => {
         ]}
       />,
     );
-    // The fold also holds the turn's earlier reply, so smooth follow crosses thousands of pixels.
-    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2), { timeout: 3_000 });
+    await vi.waitFor(() => {
+      expect(distanceFromEnd()).toBeGreaterThan(500);
+      expect(heading.element().getBoundingClientRect().top).toBeCloseTo(top, 0);
+    });
   });
 
   it.each(["delegated", "legacy", "missing"] as const)(
@@ -696,6 +737,10 @@ describe("MessagesTimeline messages", () => {
 
     expect(screen.button("Next turn")).toBeDisabled();
 
+    // A reader's scroll releases follow, which counts as the end.
+    await screen.rerender(
+      <MessagesTimeline {...props} timelineEntries={entries} liveFollowEnabled={false} />,
+    );
     viewport.scrollTop -= 30;
     await vi.waitFor(() => expect(screen.button("Next turn")).not.toBeDisabled());
     // Legend keeps its initial end anchor until a scroll leaves the end, and re-pins on resize.
@@ -913,7 +958,8 @@ describe("MessagesTimeline messages", () => {
   });
 
   it("steps the minimap's next turn past two adjacent user messages", async () => {
-    const props = baseProps();
+    // Leaving the end releases follow, which counts as the end.
+    const props = { ...baseProps(), liveFollowEnabled: false };
     const reply = (id: string) => message("Reply.\n\n".repeat(120), { role: "assistant" }, id);
     const userIds = ["turn-0", "turn-1", "turn-2", "pair-a", "pair-b", "turn-3", "turn-4"];
     const entries = [

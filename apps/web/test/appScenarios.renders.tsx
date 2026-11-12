@@ -289,15 +289,17 @@ it("app-stream-assistant-turn", async () => {
       .element(page.getByText(`word${STREAM_DELTAS - 1}`, { exact: false }))
       .toBeVisible();
   });
-  // Only the streaming row changes. The timeline renders for the new item and its layout, not
-  // per delta, and history rows not at all.
-  expect(counted.components.ConversationTimeline).toBeLessThanOrEqual(3);
+  // Only the streaming row changes. The timeline renders for the new item and its layout, and
+  // as motion pins the entering row and releases it, not per delta, and history rows not at all.
+  expect(counted.components.ConversationTimeline).toBeLessThanOrEqual(5);
   expect(counted.components.UserTimelineRow).toBeUndefined();
   // Paced reveal renders the row on its own clock, at most once per delta.
   expect(counted.components.AssistantTimelineRow).toBeLessThanOrEqual(STREAM_DELTAS);
-  // Each delta adds a paragraph; finished blocks keep their render.
-  expect(counted.components.MarkdownParagraph).toBe(STREAM_DELTAS);
   await report("app-stream-assistant-turn", [counted], { commits: false });
+  // Words renders paragraphs as static HTML. Each block mounts and may render once more
+  // to become cacheable when the next block starts.
+  expect(counted.components.MarkdownSource).toBeGreaterThanOrEqual(STREAM_DELTAS);
+  expect(counted.components.MarkdownSource).toBeLessThanOrEqual(2 * STREAM_DELTAS - 1);
 });
 
 it("app-terminal-updates-in-other-thread", async () => {
