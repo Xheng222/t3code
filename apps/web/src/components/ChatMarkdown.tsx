@@ -2081,10 +2081,12 @@ function ChatMarkdown({
   renderInsights = false,
   ...props
 }: ChatMarkdownProps) {
+  const [hasStreamed, setHasStreamed] = useState(props.isStreaming === true);
+  if (props.isStreaming === true && !hasStreamed) setHasStreamed(true);
   // Streaming re-renders only the last block; offsets for task edits, and extensions that read
   // the whole message, need the whole text.
   const streamingBlocks =
-    props.isStreaming === true && !inline && extensions === NO_EXTENSIONS && !props.onTaskListChange
+    hasStreamed && !inline && extensions === NO_EXTENSIONS && !props.onTaskListChange
       ? (splitMarkdownBlocks(text) ?? [text])
       : null;
   const { componentState, handleCopy, markdownRef, localMediaPreview, closeLocalMediaPreview } =

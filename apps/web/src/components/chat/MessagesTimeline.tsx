@@ -29,6 +29,7 @@ import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRunt
 import { observeResize } from "~/lib/observeResize";
 import { preserveReadingPosition } from "~/lib/preserveReadingPosition";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useForkTimeline, useForkTimelinePresentation } from "./MessagesTimeline.fork";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const EMPTY_PENDING_APPROVALS: ReadonlyArray<PendingApproval> = [];
@@ -144,7 +145,7 @@ import {
 } from "./timelineViewport";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
-import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
+import { useStableHandoffRuns, useIncrementalTimelineRows } from "./useTimelineRows";
 import { useClientSettings } from "../../hooks/useSettings";
 
 function timelineListStateFor(identity: string): {
@@ -435,6 +436,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
 }: MessagesTimelineProps) {
   const gt = useGT();
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
+  const forkPresentation = useForkTimelinePresentation({
+    identity: listIdentityKey,
+    timelineEntries,
+  });
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
   // Find open at the opening is part of the snapshot: opening find later
   // announces its own navigation (threadFindStore's announceOpening).
@@ -770,7 +775,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     toolCallVisibility,
     revealedMessageId,
   });
-  const rows = useStableRows(rawRows, listIdentityKey);
+  const [rows, fork] = useForkTimeline(forkPresentation, rawRows);
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
     const entries =
@@ -1388,7 +1393,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return next;
     });
   });
-  const renderItem = ({ item }: { item: MessagesTimelineRow }) => (
+  const renderItem = fork.withRowFrame(({ item }: { item: MessagesTimelineRow }) => (
     <TimelineRowCtx value={sharedState}>
       <div
         className="messages-timeline-row-frame"
@@ -1408,8 +1413,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
         </div>
       </div>
     </TimelineRowCtx>
-  );
-  const listExtraData = { identity: listIdentityKey, rowCount: rows.length, sharedState };
+  ));
+  const listExtraData = {
+    identity: listIdentityKey,
+    rowCount: rows.length,
+    sharedState,
+    forkRowState: fork.rowState,
+  };
   const timelineListFooter = (
     <TimelineListFooter
       composerInset={anchoredEndSpace ? 0 : contentInsetEndAdjustment}
@@ -1502,7 +1512,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 !liveFollowEnabled ||
                 fullscreenAppRowId !== null
                   ? false
-                  : isWorking && !syncing && !prefersReducedMotion && settlingListIdentity === null
+                  : (isWorking || forkPresentation.visit.pending.size > 0) &&
+                      !syncing &&
+                      !prefersReducedMotion &&
+                      settlingListIdentity === null
                     ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
                     : TIMELINE_MAINTAIN_SCROLL_AT_END
               }
