@@ -17,24 +17,39 @@ type Props = ComponentProps<typeof ChatMarkdown> & {
   seenMessages: Set<string>;
   animateInitial: boolean;
   immediate: boolean;
-  onPendingChange: (messageId: string, pending: boolean) => void;
+  onPendingChange: (messageId: string, pending: boolean, textLength: number) => void;
 };
 
 export function StreamingMarkdown(props: Props) {
   const { messageId, seenMessages, animateInitial, immediate, onPendingChange, ...markdown } =
     props;
-  const [live, setLive] = useState(markdown.isStreaming === true || animateInitial);
-  if ((markdown.isStreaming || animateInitial) && !live) setLive(true);
-  const [initiallyVisible] = useState(() => seenMessages.has(messageId));
+  const startPresentation = (generation: number) => ({
+    seenMessages,
+    generation,
+    live: markdown.isStreaming === true || animateInitial,
+    initiallyVisible: seenMessages.has(messageId),
+  });
+  const [state, setState] = useState(() => startPresentation(0));
+  let presentation = state;
+  // A new visit takes the text this message already shows as history, without a reveal.
+  if (presentation.seenMessages !== seenMessages) {
+    presentation = startPresentation(presentation.generation + 1);
+    setState(presentation);
+  }
+  if ((markdown.isStreaming || animateInitial) && !presentation.live) {
+    presentation = { ...presentation, live: true };
+    setState(presentation);
+  }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records mounted messages so virtualization cannot replay their existing text
   useLayoutEffect(() => {
     seenMessages.add(messageId);
   }, [messageId, seenMessages]);
-  return live ? (
+  return presentation.live ? (
     <PresentedMarkdown
+      key={presentation.generation}
       {...markdown}
       messageId={messageId}
-      initiallyVisible={initiallyVisible}
+      initiallyVisible={presentation.initiallyVisible}
       immediate={immediate}
       onPendingChange={onPendingChange}
     />
@@ -82,11 +97,6 @@ function PresentedMarkdown({
       presentation.dispose();
     };
   }, [presentation, onVisibility]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports only presentation start/end to the timeline's smooth-follow state
-  useLayoutEffect(() => {
-    onPendingChange(messageId, pending);
-    return () => onPendingChange(messageId, false);
-  }, [messageId, pending, onPendingChange]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns the DOM reveal subscription only while text is arriving or draining
   useLayoutEffect(() => {
     if (!retained || !root.current) return;
@@ -106,6 +116,15 @@ function PresentedMarkdown({
     presentation.update(markdown.text, immediate || reducedMotion || document.hidden);
     reveal.current?.refresh();
   }, [presentation, markdown.text, immediate, reducedMotion]);
+  const finishPresentation = useStableCallback(() =>
+    onPendingChange(messageId, false, markdown.text.length),
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases presentation when virtualization unmounts an offscreen message
+  useLayoutEffect(() => () => finishPresentation(), [finishPresentation]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports source completion after reveal and the final character fade
+  useLayoutEffect(() => {
+    onPendingChange(messageId, presentation.getPending() || retained, markdown.text.length);
+  }, [messageId, retained, markdown.text, presentation, onPendingChange]);
   return (
     <div ref={root} className="relative" data-streaming-presentation={retained ? "" : undefined}>
       <ChatMarkdown {...markdown} />

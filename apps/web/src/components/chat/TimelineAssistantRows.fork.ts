@@ -16,8 +16,16 @@ export function useForkAssistantText(
     row.projectedItem?.item.status === "interrupted" ||
     row.projectedItem?.item.status === "cancelled" ||
     row.projectedItem?.item.status === "failed";
+  const presented = forkCtx.presentedAssistantMessages.get(row.message.id);
+  const showChangedFiles =
+    !row.message.streaming &&
+    !forkCtx.pendingAssistantMessages.has(row.message.id) &&
+    (latestRunId === null ||
+      row.message.runId !== latestRunId ||
+      (presented !== undefined && presented >= incomingText.length));
   return {
     text: incomingText,
+    showChangedFiles,
     streamingProps: {
       messageId: row.message.id,
       seenMessages: forkCtx.seenAssistantMessages,
