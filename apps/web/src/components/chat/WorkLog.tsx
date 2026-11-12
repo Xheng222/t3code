@@ -21,15 +21,7 @@ export function WorkLogBlock({
   children: ReactNode;
 }) {
   return (
-    <div
-      className={
-        continues || layout === "group-header"
-          ? "pb-0"
-          : layout === "group-content"
-            ? "pb-1"
-            : "pb-2"
-      }
-    >
+    <div className={continues ? "pb-0" : layout === "group-content" ? "pb-1" : "pb-2"}>
       {children}
     </div>
   );
@@ -50,6 +42,16 @@ type RowContent = {
   wrapLabel?: boolean;
 };
 
+export function WorkLogIcon({ children }: { children: ReactNode }) {
+  return (
+    <span className="relative w-6 shrink-0 leading-0">
+      <span className="inline-block size-6 overflow-hidden align-[calc(0.5cap_-_0.75rem)]">
+        <span className="flex size-full items-center justify-center">{children}</span>
+      </span>
+    </span>
+  );
+}
+
 function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
   return (
     <div
@@ -59,13 +61,7 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
       )}
     >
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        {icon ? (
-          <span className="relative w-6 shrink-0 leading-0">
-            <span className="inline-block size-6 overflow-hidden align-[calc(0.5cap_-_0.75rem)]">
-              <span className="flex size-full items-center justify-center">{icon}</span>
-            </span>
-          </span>
-        ) : null}
+        {icon ? <WorkLogIcon>{icon}</WorkLogIcon> : null}
         <div
           className={cn(
             "min-w-0 flex-1 text-secondary-label",

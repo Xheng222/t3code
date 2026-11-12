@@ -26,7 +26,7 @@ export function ThreadTimeline({
   syncing,
   detailLoading,
   ...timelineProps
-}: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
+}: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries" | "synced"> & {
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
   threadDetailRef: ScopedThreadRef | null;
   entriesInput: Omit<TimelineEntriesInput, "visibleTurnItems">;
@@ -59,5 +59,5 @@ export function ThreadTimeline({
   const processEntries = displayedEntries.filter(
     (entry) => entry.kind !== "work" || entry.entry.itemType !== "todo_list",
   );
-  return <MessagesTimeline {...timelineProps} timelineEntries={processEntries} />;
+  return <MessagesTimeline {...timelineProps} synced={!syncing} timelineEntries={processEntries} />;
 }

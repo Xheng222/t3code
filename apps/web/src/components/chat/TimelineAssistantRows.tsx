@@ -47,7 +47,10 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
     row.message.streaming ? ctx.threadRef : null,
     row.projectedItem?.item.id,
   );
-  const { text, streamingProps } = useForkAssistantText(row, liveText ?? row.message.text);
+  const { text, showChangedFiles, streamingProps } = useForkAssistantText(
+    row,
+    liveText ?? row.message.text,
+  );
   const messageText =
     text || (row.message.streaming || row.suppressEmptyResponse ? "" : "(empty response)");
 
@@ -85,7 +88,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             />
           </AssistantCitationSource>
         </div>
-        {ctx.onOpenTurnDiff ? (
+        {ctx.onOpenTurnDiff && showChangedFiles ? (
           <AssistantChangedFilesSection
             turnSummary={row.assistantTurnDiffSummary}
             routeThreadKey={ctx.routeThreadKey}

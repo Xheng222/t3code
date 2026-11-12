@@ -376,7 +376,8 @@ describe("MessagesTimeline work rows", () => {
         ]}
       />,
     );
-    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+    // The fold also holds the turn's earlier reply, so smooth follow crosses thousands of pixels.
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2), { timeout: 3_000 });
   });
 
   it.each(["delegated", "legacy", "missing"] as const)(
@@ -1230,28 +1231,56 @@ describe("MessagesTimeline citations", () => {
       .toBeVisible();
   });
 
-  it("lands a citation present at mount under StrictMode", async () => {
-    await using _screen = await renderElement(
+  it("lands a citation present at mount under StrictMode, then presents turns normally", async () => {
+    const props = baseProps();
+    const ui = (later: Entry[] = []) => (
       <StrictMode>
         <MessagesTimeline
-          {...baseProps()}
+          {...props}
+          isWorking={later.length > 0}
+          runlessWorkActive={later.length > 0}
           timelineEntries={[
             message("A question", {}, "question"),
             message("the cited answer", { role: "assistant" }, "cited"),
+            ...later,
           ]}
           citationRequest={CITATION_REQUEST}
           citationHistory={{ _tag: "found" }}
         />
-      </StrictMode>,
-      // The test router mounts route content without StrictMode's effect replay.
-      { router: false },
+      </StrictMode>
     );
+    // The test router mounts route content without StrictMode's effect replay.
+    await using screen = await renderElement(ui(), { router: false });
     // StrictMode replays effect cleanups on mount; the activation must survive them.
     await vi.waitFor(() =>
       expect(document.querySelector("[data-citation-highlighted]")?.textContent).toContain(
         "the cited answer",
       ),
     );
+    // The citation stays in the URL after it lands; a streaming reply holds the work after it again.
+    await screen.rerender(
+      ui([
+        message("Still streaming", { role: "assistant", streaming: true }, "next-reply"),
+        work("later-command", {
+          command: "echo later",
+          label: "Ran echo",
+          tone: "tool",
+          itemType: "command_execution",
+          toolLifecycleStatus: "inProgress",
+          projectedItem: v2Item("command_execution", {
+            input: "echo later",
+            output: "",
+            status: "running",
+          }),
+        }),
+      ]),
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen.container.querySelector('[data-timeline-row-id="entry-next-reply"]'),
+      ).not.toBeNull(),
+    );
+    expect(screen.text()).not.toContain("echo later");
   });
 
   it("opens the superseded attempt that folds the cited response", async () => {

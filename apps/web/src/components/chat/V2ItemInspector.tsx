@@ -192,7 +192,7 @@ export function FetchedToolOutput(props: {
   );
 }
 
-function ToolCallBody(
+export function ToolCallBody(
   props: ToolOutputState & {
     readonly command?: string;
     readonly args?: unknown;
