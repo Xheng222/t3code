@@ -26,7 +26,7 @@ export function ThreadTimeline({
   syncing,
   detailLoading,
   ...timelineProps
-}: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
+}: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries" | "synced"> & {
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
   threadDetailRef: ScopedThreadRef | null;
   entriesInput: Omit<TimelineEntriesInput, "visibleTurnItems">;
@@ -59,5 +59,7 @@ export function ThreadTimeline({
     }
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  return (
+    <MessagesTimeline {...timelineProps} synced={!syncing} timelineEntries={displayedEntries} />
+  );
 }
