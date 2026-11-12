@@ -2064,7 +2064,10 @@ export default function ThreadGitActionsControl({
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
   // Subscribed so a granted or revoked scope re-renders the control that reads it on demand.
   useEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope);
-  const activeServerThreadShell = useQuietThreadShell(activeThreadRef);
+  const serverBranch = useQuietThreadShell(activeThreadRef, (thread) => thread?.branch);
+  const hasRun = useQuietThreadShell(activeThreadRef, (thread) =>
+    thread ? thread.latestRun !== null : undefined,
+  );
   const activeDraftThread = useComposerDraftStore((store) =>
     draftId
       ? store.getDraftSession(draftId)
@@ -2072,12 +2075,13 @@ export default function ThreadGitActionsControl({
         ? store.getDraftThreadByRef(activeThreadRef)
         : null,
   );
-  const activeServerThreadProjection = useQuietThreadProjection(
-    activeDraftThread !== null && activeServerThreadShell === null ? null : activeThreadRef,
+  const projectedBranch = useQuietThreadProjection(
+    serverBranch !== undefined || activeDraftThread !== null ? null : activeThreadRef,
+    (thread) => thread?.projection.thread.branch,
   );
-  const activeServerThread =
-    activeServerThreadShell ?? activeServerThreadProjection?.projection.thread ?? null;
-  const isLocalDraftThread = activeDraftThread !== null && activeServerThread === null;
+  const recordedBranch = serverBranch !== undefined ? serverBranch : projectedBranch;
+  const hasServerThread = recordedBranch !== undefined;
+  const isLocalDraftThread = activeDraftThread !== null && !hasServerThread;
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const changesBaseRef = useDiffPanelStore((state) =>
     selectThreadBranchBaseRef(state, activeThreadRef),
@@ -2099,10 +2103,10 @@ export default function ThreadGitActionsControl({
       return;
     }
 
-    if (activeServerThread) {
+    if (recordedBranch !== undefined) {
       if (
         !readEnvironmentScope(activeThreadRef.environmentId, AuthOrchestrationOperateScope) ||
-        activeServerThread.branch === branch
+        recordedBranch === branch
       ) {
         return;
       }
@@ -2111,7 +2115,7 @@ export default function ThreadGitActionsControl({
         environmentId: activeThreadRef.environmentId,
         input: {
           threadId: activeThreadRef.threadId,
-          ...resolveThreadBranchMetadataPatch(branch, activeServerThread.branch),
+          ...resolveThreadBranchMetadataPatch(branch, recordedBranch),
         },
       });
 
@@ -2136,7 +2140,7 @@ export default function ThreadGitActionsControl({
   });
 
   const isSelectingWorktreeBase =
-    !activeServerThread &&
+    !hasServerThread &&
     activeDraftThread?.envMode === "worktree" &&
     activeDraftThread.worktreePath === null;
 
@@ -2150,7 +2154,7 @@ export default function ThreadGitActionsControl({
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists the draft thread branch when the live git status subscription reports a different branch
   useEffect(() => {
-    if (isGitActionRunning || isSelectingWorktreeBase || activeServerThread || isProjectCloning) {
+    if (isGitActionRunning || isSelectingWorktreeBase || hasServerThread || isProjectCloning) {
       return;
     }
 
@@ -2164,7 +2168,7 @@ export default function ThreadGitActionsControl({
 
     persistLiveThreadBranch(branchUpdate.branch);
   }, [
-    activeServerThread,
+    hasServerThread,
     activeDraftThread?.branch,
     gitStatus,
     isGitActionRunning,
@@ -2178,7 +2182,7 @@ export default function ThreadGitActionsControl({
       target={gitCwd === null ? null : { key: gitCwd, cwd: gitCwd, name }}
       threadRef={activeThreadRef}
       owner={{
-        ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
+        ...(hasServerThread && activeThreadRef ? { threadId: activeThreadRef.threadId } : {}),
         ...(activeDraftThread ? { projectId: activeDraftThread.projectId } : {}),
       }}
       branchFollower={{
@@ -2188,7 +2192,7 @@ export default function ThreadGitActionsControl({
             readEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope)),
         follow: (branch) => persistThreadBranchSync(branch, true),
       }}
-      quietUntilWork={draftId !== undefined || activeServerThreadShell?.latestRun === null}
+      quietUntilWork={draftId !== undefined || hasRun === false}
       changesBaseRef={changesBaseRef}
     />
   );
