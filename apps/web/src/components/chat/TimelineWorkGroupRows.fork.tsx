@@ -34,7 +34,11 @@ import {
   type TimelineRow,
   type WorkGroupViewedImage,
 } from "./timelineRowContext";
-import { ForkTimelineRowCtx, ForkWorkGroupViewCtx } from "./timelineRowContext.fork";
+import {
+  ForkTimelineRowCtx,
+  ForkWorkGroupViewCtx,
+  type WorkEntryToggle,
+} from "./timelineRowContext.fork";
 import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
 import {
   failedToolIconClassName,
@@ -66,7 +70,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
 }) {
   const { workspaceRoot, pendingApprovals } = use(TimelineRowCtx);
   const { onWorkEntryToggle, workGroupViewState } = use(ForkTimelineRowCtx);
-  const onToggleEntry = () => onWorkEntryToggle(anchorKey);
+  const onToggleEntry = (toggle: WorkEntryToggle) => onWorkEntryToggle(anchorKey, toggle);
   // Group members are already filtered together with their current status.
   const nonEmptyEntries = groupId
     ? groupedEntries

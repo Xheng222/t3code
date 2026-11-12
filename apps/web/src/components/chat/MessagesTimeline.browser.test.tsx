@@ -1102,7 +1102,8 @@ describe("MessagesTimeline messages", () => {
       await vi.waitFor(() => expect(viewport.scrollHeight).toBeGreaterThan(3000));
       await act(() => viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 })));
     }
-    if (mode.startsWith("grouped-")) {
+    // The fork shows a single tool as a group too, so every mode opens the group first.
+    {
       await act(() => {
         void props.listRef.current!.scrollToIndex({ index: 6, animated: false });
       });

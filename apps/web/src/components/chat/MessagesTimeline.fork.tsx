@@ -25,11 +25,13 @@ import {
   usePacedActivityRows,
   waitingResponseLabel,
 } from "./activityPresentation.fork";
+import { attachTimelineEntryScroll } from "./timelineEntryScroll.fork";
 import { TimelineMotionRow, useTimelineMotionRows } from "./timelineMotion.fork";
 import {
   ForkTimelineRowCtx,
   type ForkTimelineRowState,
   type ForkWorkGroupViewState,
+  type WorkEntryToggle,
 } from "./timelineRowContext.fork";
 import { CHAT_TIMELINE_ANCHOR_OFFSET } from "./timelineScrollAnchoring";
 import { type TimelineViewport } from "./timelineViewport";
@@ -103,8 +105,8 @@ export function useForkTimelinePresentation(input: {
 type ForkTimelinePresentation = ReturnType<typeof useForkTimelinePresentation>;
 
 /**
- * Paced and process rows, work group auto-collapse, motion rows and the end gap, from the derived
- * rows. Returns the rows the list shows and the fork's list hooks.
+ * Paced and process rows, work group auto-collapse, motion rows, the end gap and entry scroll,
+ * from the derived rows. Returns the rows the list shows and the fork's list hooks.
  */
 export function useForkTimeline(
   presentation: ForkTimelinePresentation,
@@ -122,6 +124,8 @@ export function useForkTimeline(
     isCompacting: boolean;
     awaitingUser: "approval" | "input" | null;
     pendingApprovals: ReadonlyArray<PendingApproval>;
+    liveFollowEnabled: boolean;
+    contentInsetEndAdjustment: number;
     listRef: RefObject<LegendListRef | null>;
     navigateTimeline: () => void;
   },
@@ -219,13 +223,41 @@ export function useForkTimeline(
       !input.restoringThreadPosition &&
       !settling,
   );
+  const entryScrollRef = useRef<ReturnType<typeof attachTimelineEntryScroll> | null>(null);
+  const [holdingEntryLine, setHoldingEntryLine] = useState(false);
+  const readComposerInset = useStableCallback(() => input.contentInsetEndAdjustment);
+  // The last row of an opened group, `null` past the rendered rows and `undefined` until it renders.
+  const groupEnd = useStableCallback((groupId: string, node: HTMLElement) => {
+    const last = rows.findLast(
+      (row) => row.kind === "work" && row.groupId === groupId && row.isExpandedToolGroup,
+    );
+    const state = listRef.current?.getState();
+    const index = last ? state?.indexByKey(last.id) : undefined;
+    if (!last || !state || index === undefined) return undefined;
+    const element = node.querySelector<HTMLElement>(
+      `[data-timeline-motion-row="${CSS.escape(last.id)}"]`,
+    );
+    return element ?? (index > state.endBuffered ? null : undefined);
+  });
   // Turn folds share `turn-status:*` ids with the working row; upstream anchors them by run.
-  const captureDisclosure = (anchorKey: string) => {
+  const captureDisclosure = (anchorKey: string, opening = false) => {
     const header = rows.find(
       (row) => row.kind === "turn-fold" && `turn-fold:${row.runId}` === anchorKey,
     );
     navigateTimeline();
     motion.capture(header?.id ?? anchorKey);
+    const node = opening ? listRef.current?.getScrollableNode() : undefined;
+    const head = node?.querySelector<HTMLElement>(
+      `[data-timeline-motion-row="${CSS.escape(anchorKey)}"]`,
+    );
+    // An opened group reveals through its last entry row; any other row reveals itself.
+    if (node && head) {
+      const anchor = rows.find((row) => row.id === anchorKey);
+      const groupId = anchor && "groupId" in anchor ? anchor.groupId : undefined;
+      entryScrollRef.current?.revealRows(head, () =>
+        groupId === undefined ? head : groupEnd(groupId, node),
+      );
+    }
     return true;
   };
   // The current turn starts at the latest prompt; steers continue it.
@@ -271,6 +303,16 @@ export function useForkTimeline(
       if (endGapRef.current === gap) endGapRef.current = null;
     };
   });
+  const onWorkEntryToggle = useStableCallback((anchorKey: string, toggle: WorkEntryToggle) => {
+    // A live preview toggled while following stays in follow, which keeps its growing end in view.
+    const following = toggle.preview && input.liveFollowEnabled;
+    entryScrollRef.current?.stop();
+    if (following) motion.capture(anchorKey);
+    else captureDisclosure(anchorKey);
+    if (toggle.expanding) entryScrollRef.current?.reveal(toggle.entry, { scrolls: !following });
+    else if (!following && toggle.line.dataset.stuck !== undefined)
+      entryScrollRef.current?.hold(toggle.entry, toggle.line);
+  });
   const pendingPromptIndex =
     anchorMessageId === null
       ? -1
@@ -300,13 +342,16 @@ export function useForkTimeline(
     presentedAssistantMessages: visit.completed,
     pendingAssistantMessages: visit.pending,
     presentationPaused: paused,
-    onWorkEntryToggle: captureDisclosure,
+    onWorkEntryToggle,
     workGroupViewState: input.workGroupViewState,
   };
   const fork = {
     rowState,
     exits,
-    /** Replaces upstream's disclosure anchoring: motion keeps the toggled row in place. */
+    /**
+     * Replaces upstream's disclosure anchoring and reveal: motion keeps the toggled row in place,
+     * and entry scroll reveals what it opens.
+     */
     captureDisclosure,
     /** Kept mounted ahead of upstream's: motion's pinned rows, and a send's rows while it positions. */
     alwaysRenderKeys: [
@@ -347,7 +392,7 @@ export function useForkTimeline(
       // Follow scrolls to the end itself, after motion lays rows out.
       maintainScrollAtEnd: false,
       maintainVisibleContentPosition:
-        findExpanded || citationPositioning || input.restoringThreadPosition
+        findExpanded || citationPositioning || input.restoringThreadPosition || holdingEntryLine
           ? false
           : prepended
             ? true
@@ -376,12 +421,29 @@ export function useForkTimeline(
         detachMotion();
       };
     },
-    /** The content size schedule, which replaces upstream's; attach after follow. */
+    /**
+     * Entry scroll and the content size schedule, which replaces upstream's; attach after
+     * follow, whose layout step entry scroll follows.
+     */
     attachAfterFollow: (
       viewport: TimelineViewport | null,
       list: LegendListRef | null,
       onContentSizeChanged: () => void,
     ) => {
+      const entryScroll = viewport
+        ? attachTimelineEntryScroll(viewport, {
+            composerInset: readComposerInset,
+            endClearance: () =>
+              endGapRef.current
+                ? Number.parseFloat(getComputedStyle(endGapRef.current).paddingTop) || 0
+                : 0,
+            isAnimating: motion.isAnimating,
+            trimClosing: motion.trimClosing,
+            trimOpening: motion.trimOpening,
+            onHold: setHoldingEntryLine,
+          })
+        : null;
+      entryScrollRef.current = entryScroll;
       let contentSizeFrame: number | null = null;
       // LegendList lays rows out from layout effects; the next frame sees them settled.
       const scheduleContentSizeChanged = () => {
@@ -406,6 +468,8 @@ export function useForkTimeline(
       return () => {
         stopListeningToContentSize?.();
         stopListeningToFooterSize?.();
+        entryScroll?.dispose();
+        if (entryScrollRef.current === entryScroll) entryScrollRef.current = null;
         if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);
       };
     },

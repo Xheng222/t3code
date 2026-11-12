@@ -271,6 +271,7 @@ export function TimelineDisclosure({
     <div className="relative" data-motion-slide={!open && slide ? "" : undefined}>
       <div
         className="flow-root"
+        data-motion-disclosure=""
         data-motion-closing-body={!open ? "" : undefined}
         data-motion-preview-measure={measureOnly ? "" : undefined}
         style={
