@@ -9,7 +9,7 @@ export interface ForkTimelineRowState {
   onPresentationPendingChange: (messageId: string, pending: boolean, textLength: number) => void;
   pendingAssistantMessages: ReadonlySet<string>;
   presentationPaused: boolean;
-  onWorkEntryToggle: (anchorKey: string) => void;
+  onWorkEntryToggle: (anchorKey: string, toggle: WorkEntryToggle) => void;
   workGroupViewState: ForkWorkGroupViewState;
 }
 
@@ -20,8 +20,17 @@ export interface ForkWorkGroupViewState extends WorkGroupViewState {
   expandedPreviewRuns: Set<RunId | null>;
 }
 
+export interface WorkEntryToggle {
+  readonly entry: HTMLElement;
+  /** The entry's header line, marked `data-stuck` while it sticks to the top of the timeline. */
+  readonly line: HTMLElement;
+  readonly expanding: boolean;
+  /** The entry is the live preview's. */
+  readonly preview: boolean;
+}
+
 export const ForkWorkGroupViewCtx = createContext<{
   state: ForkWorkGroupViewState;
   viewedImages: ReadonlyArray<WorkGroupViewedImage>;
-  onToggleEntry: () => void;
+  onToggleEntry: (toggle: WorkEntryToggle) => void;
 } | null>(null);

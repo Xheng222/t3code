@@ -6,6 +6,7 @@ import {
   useRef,
   type ComponentProps,
   type ReactNode,
+  type Ref,
 } from "react";
 import { TimelineDisclosureIndicator } from "./timelineMotion.fork";
 import { cn } from "../../lib/utils";
@@ -60,6 +61,13 @@ export function WorkLogIcon({ children }: { children: ReactNode }) {
   );
 }
 
+// An open row marks its line `data-sticky`, and `data-stuck` while the line covers the row's body
+// at the top of the timeline. A focused row's line stays clear until it sticks, so its ring shows.
+const stickyLineClassName = cn(
+  "data-[sticky]:sticky data-[sticky]:top-0 data-[sticky]:z-10 data-[sticky]:bg-background group-focus-visible/timeline-row:not-data-[stuck]:bg-transparent",
+  "data-[stuck]:after:pointer-events-none data-[stuck]:after:absolute data-[stuck]:after:inset-x-0 data-[stuck]:after:top-full data-[stuck]:after:h-2.5 data-[stuck]:after:bg-linear-to-b data-[stuck]:after:from-background data-[stuck]:after:to-transparent",
+);
+
 function WorkLogLine({
   icon,
   label,
@@ -67,15 +75,18 @@ function WorkLogLine({
   trailing,
   wrapLabel,
   interactive,
+  lineRef,
   ...lineProps
-}: RowContent & LineProps & { interactive: boolean }) {
+}: RowContent & LineProps & { interactive: boolean; lineRef?: Ref<HTMLDivElement> | undefined }) {
   return (
     <div
       {...lineProps}
+      ref={lineRef}
       className={cn(
         "flex min-h-6 min-w-0 gap-1.5 text-sm leading-relaxed select-none [&_*]:select-none",
         wrapLabel ? "items-start" : "items-center",
         lineProps.role === "button" && focusRingClassName,
+        stickyLineClassName,
       )}
     >
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
@@ -83,7 +94,7 @@ function WorkLogLine({
         <div className="flex min-w-0 items-start gap-1">
           <div
             className={cn(
-              "min-w-0 text-secondary-label transition-colors",
+              "min-w-0 text-secondary-label transition-colors in-data-[stuck]:text-foreground",
               interactive && "group-hover/timeline-row:text-foreground",
               !wrapLabel && "truncate [&_*]:whitespace-nowrap",
             )}
@@ -146,9 +157,10 @@ export function WorkLogRow({
   trailing,
   wrapLabel = false,
   toggle,
+  lineRef,
   children,
   ...rowProps
-}: RowContent & RowProps) {
+}: RowContent & RowProps & { lineRef?: Ref<HTMLDivElement> | undefined }) {
   const className = useRowClassName(rowProps.onClick !== undefined, false);
   const detailsId = useId();
   return (
@@ -162,6 +174,7 @@ export function WorkLogRow({
         trailing={trailing}
         wrapLabel={wrapLabel}
         interactive={rowProps.onClick !== undefined}
+        lineRef={lineRef}
       />
       {toggle ? <div id={detailsId}>{children}</div> : children}
     </div>
