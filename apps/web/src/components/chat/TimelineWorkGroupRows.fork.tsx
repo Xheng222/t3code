@@ -13,7 +13,7 @@ import { memo, use, type ReactNode } from "react";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import { assetMediaActionsSource } from "./ChatMarkdownMedia";
-import { ChevronRightIcon, Minimize2Icon, XIcon } from "lucide-react";
+import { Minimize2Icon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { workEntryIsVisibleInGroup, type MessagesTimelineRow } from "./MessagesTimeline.logic";
 import { processActivityLabel } from "./MessagesTimeline.logic.fork";
@@ -38,6 +38,11 @@ import {
 } from "./TimelineToolActivityIcon";
 import { SimpleWorkEntryRow } from "./TimelineWorkEntryRow.fork";
 import { formatWorkingTimerNow } from "./TimelineWorkGroupRows.logic";
+import {
+  TimelineDisclosure,
+  TimelineDisclosureIndicator,
+  useClosingMotionChildren,
+} from "./timelineMotion.fork";
 
 export const WorkGroupSection = memo(function WorkGroupSection({
   anchorKey,
@@ -57,9 +62,9 @@ export const WorkGroupSection = memo(function WorkGroupSection({
   viewedImagePaths?: ReadonlyArray<string> | undefined;
   preview?: boolean;
 }) {
-  const { workspaceRoot, onToggleWorkEntry, pendingApprovals } = use(TimelineRowCtx);
-  const { workGroupViewState } = use(ForkTimelineRowCtx);
-  const onToggleEntry = (collapsed: boolean) => onToggleWorkEntry(anchorKey, collapsed);
+  const { workspaceRoot, pendingApprovals } = use(TimelineRowCtx);
+  const { onWorkEntryToggle, workGroupViewState } = use(ForkTimelineRowCtx);
+  const onToggleEntry = () => onWorkEntryToggle(anchorKey);
   // Group members are already filtered together with their current status.
   const nonEmptyEntries = groupId
     ? groupedEntries
@@ -419,6 +424,7 @@ export function ProcessGroupTimelineRow({
 }) {
   const ctx = use(TimelineRowCtx);
   const { providerStartingLabel } = use(TimelineRowActivityCtx);
+  const closingHistory = useClosingMotionChildren();
   return (
     <WorkLogBlock layout="group-header" continues={row.continuesWorkLog}>
       {row.kind === "work-waiting" ? (
@@ -436,17 +442,23 @@ export function ProcessGroupTimelineRow({
       ) : (
         <WorkGroupToggleTimelineRow row={row} />
       )}
-      {row.kind === "work-live" && !row.expanded ? (
-        <div data-activity-preview className="ml-2 border-l border-border/60 pl-2 pb-1">
-          <WorkGroupSection
-            anchorKey={row.id}
-            groupedEntries={[row.entry]}
-            isExpandedToolGroup={false}
-            groupId={row.groupId}
-            preview
-          />
-        </div>
-      ) : null}
+      <TimelineDisclosure
+        open={row.kind === "work-live" && !row.expanded}
+        retainOnClose={row.kind !== "work-live" || !row.expanded}
+        measureOnly={closingHistory}
+      >
+        {row.kind === "work-live" ? (
+          <div data-activity-preview className="ml-2 border-l border-border/60 pl-2 pb-1">
+            <WorkGroupSection
+              anchorKey={row.id}
+              groupedEntries={[row.entry]}
+              isExpandedToolGroup={false}
+              groupId={row.groupId}
+              preview
+            />
+          </div>
+        ) : null}
+      </TimelineDisclosure>
     </WorkLogBlock>
   );
 }
@@ -509,9 +521,9 @@ export function WorkGroupHeader(props: {
             />
           ) : null)}
         {hasHistory ? (
-          <ChevronRightIcon
-            aria-hidden
-            className={cn("size-3 shrink-0 text-icon-muted", props.expanded && "rotate-90")}
+          <TimelineDisclosureIndicator
+            expanded={props.expanded}
+            className="size-3 text-icon-muted"
           />
         ) : null}
       </span>

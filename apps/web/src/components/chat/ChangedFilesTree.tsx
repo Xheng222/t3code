@@ -4,20 +4,19 @@ import { type MouseEvent, type ReactNode, memo, useLayoutEffect, useRef, useStat
 import { type TurnDiffFileChange } from "../../types";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
 import {
-  ChevronRightIcon,
   FileDiffIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   FolderClosedIcon,
   FolderIcon,
 } from "lucide-react";
-import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { observeResize } from "~/lib/observeResize";
+import { TimelineDisclosureIndicator, useTimelineResize } from "./timelineMotion.fork";
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 const VIRTUALIZE_AFTER_ROWS = 250;
@@ -52,6 +51,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
     onFileContextMenu,
   } = props;
   const syncTimelineLayout = useSyncLayout();
+  const captureResize = useTimelineResize();
   const hiddenFileCount = totals.count - files.length;
   const hasDirectories = files.some((file) => /[/\\]/.test(file.path));
 
@@ -91,6 +91,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                     }
                     data-scroll-anchor-ignore
                     onClick={() => {
+                      captureResize();
                       onToggleAllDirectories();
                       syncTimelineLayout();
                     }}
@@ -169,6 +170,7 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
     overrides: Record<string, boolean>;
   }>({ key: null, overrides: {} });
   const syncTimelineLayout = useSyncLayout();
+  const captureResize = useTimelineResize();
   const treeNodes = buildTurnDiffTree(files);
   const directoryPathsKey = collectDirectoryPaths(treeNodes).join("\u0000");
   const hasDirectoryNodes = directoryPathsKey.length > 0;
@@ -179,6 +181,7 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
       : EMPTY_DIRECTORY_OVERRIDES;
 
   const toggleDirectory = (pathValue: string) => {
+    captureResize();
     setDirectoryExpansionState((current) => {
       const nextOverrides = current.key === expansionStateKey ? current.overrides : {};
       return {
@@ -210,12 +213,9 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           style={{ paddingLeft: `${leftPadding}px` }}
           onClick={() => toggleDirectory(node.path)}
         >
-          <ChevronRightIcon
-            aria-hidden="true"
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:text-foreground/80",
-              isExpanded && "rotate-90",
-            )}
+          <TimelineDisclosureIndicator
+            expanded={isExpanded}
+            className="size-3.5 text-muted-foreground/70 group-hover:text-foreground/80"
           />
           {isExpanded ? (
             <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/75" />

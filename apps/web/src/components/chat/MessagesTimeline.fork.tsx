@@ -1,4 +1,12 @@
-import { useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { type LegendListProps, type LegendListRef } from "@legendapp/list/react";
+import {
+  useLayoutEffect,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
+import { observeResize } from "~/lib/observeResize";
 import { useClientSettings } from "../../hooks/useSettings";
 import { type PendingApproval, type TimelineEntry } from "../../session-logic";
 import {
@@ -12,19 +20,30 @@ import {
   usePacedActivityRows,
   waitingResponseLabel,
 } from "./activityPresentation.fork";
+import { TimelineMotionRow, useTimelineMotionRows } from "./timelineMotion.fork";
 import {
   ForkTimelineRowCtx,
   type ForkTimelineRowState,
   type ForkWorkGroupViewState,
 } from "./timelineRowContext.fork";
+import { type TimelineViewport } from "./timelineViewport";
 import { useTurnPresentation } from "./turnPresentation.fork";
 import { useStableRows } from "./useTimelineRows";
+
+// Rows measured or resized above the viewport keep the reading position; row changes do not.
+const KEEP_READING_POSITION_ON_RESIZE = { size: true, data: false } as const;
 
 // Optional, so TypeScript accepts the spreads as overriding upstream's values.
 type ForkRowsInput = Partial<
   Pick<
     MessagesTimelineRowsInput,
     "timelineEntries" | "sourceTimelineEntries" | "presentingRunIds" | "processRows"
+  >
+>;
+type ForkListProps = Partial<
+  Pick<
+    LegendListProps<MessagesTimelineRow>,
+    "onItemSizeChanged" | "maintainScrollAtEnd" | "maintainVisibleContentPosition"
   >
 >;
 
@@ -40,6 +59,10 @@ export function useForkTimelinePresentation(input: {
 }) {
   const { identity, timelineEntries, synced } = input;
   const toolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
+  // Opening a thread settles until a frame after its first synced layout; nothing animates
+  // or paces before, so rows that arrive with the sync appear as they are.
+  const [settledIdentity, setSettledIdentity] = useState<string | null>(null);
+  const settling = settledIdentity !== identity;
   const immediate = input.findExpanded || input.citationPositioning || toolCallVisibility === "zen";
   const { visit, entries, presentingRunIds, onPendingChange } = useTurnPresentation({
     identity,
@@ -58,6 +81,8 @@ export function useForkTimelinePresentation(input: {
   return {
     ...input,
     toolCallVisibility,
+    settling,
+    setSettledIdentity,
     immediate,
     visit,
     presentedEntries: entries,
@@ -70,8 +95,8 @@ export function useForkTimelinePresentation(input: {
 type ForkTimelinePresentation = ReturnType<typeof useForkTimelinePresentation>;
 
 /**
- * Paced and process rows and work group auto-collapse, from the derived rows. Returns the rows
- * the list shows and the fork's list hooks.
+ * Paced and process rows, work group auto-collapse and motion rows, from the derived rows.
+ * Returns the rows the list shows and the fork's list hooks.
  */
 export function useForkTimeline(
   presentation: ForkTimelinePresentation,
@@ -80,11 +105,14 @@ export function useForkTimeline(
     expandedWorkGroupIds: ReadonlySet<string>;
     setExpandedWorkGroupIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
     workGroupViewState: ForkWorkGroupViewState;
+    restoringThreadPosition: boolean;
+    prefersReducedMotion: boolean;
     activeTurnStartedAt: string | null;
     isPreparingWorktree: boolean;
     isCompacting: boolean;
     awaitingUser: "approval" | "input" | null;
     pendingApprovals: ReadonlyArray<PendingApproval>;
+    navigateTimeline: () => void;
   },
 ) {
   const {
@@ -93,12 +121,16 @@ export function useForkTimeline(
     presentedEntries,
     latestRun,
     isWorking,
+    findExpanded,
+    citationPositioning,
     toolCallVisibility,
+    settling,
     immediate,
     visit,
   } = presentation;
-  const { expandedWorkGroupIds, setExpandedWorkGroupIds, activeTurnStartedAt } = input;
-  const pacedRows = usePacedActivityRows(derivedRows, identity, immediate);
+  const { expandedWorkGroupIds, setExpandedWorkGroupIds, activeTurnStartedAt, navigateTimeline } =
+    input;
+  const pacedRows = usePacedActivityRows(derivedRows, identity, immediate || settling);
   const turnPrompt = timelineEntries.findLast(
     (entry) =>
       entry.kind === "message" &&
@@ -157,26 +189,149 @@ export function useForkTimeline(
       }
     }
   }
-  const rows = useStableRows(rawRows, identity);
+  const stableRows = useStableRows(rawRows, identity);
+  const { rows, exits, motion, pins, closingGroups, prepended } = useTimelineMotionRows(
+    stableRows,
+    identity,
+    !input.prefersReducedMotion &&
+      !findExpanded &&
+      !citationPositioning &&
+      !input.restoringThreadPosition &&
+      !settling,
+  );
+  // Turn folds share `turn-status:*` ids with the working row; upstream anchors them by run.
+  const captureDisclosure = (anchorKey: string) => {
+    const header = rows.find(
+      (row) => row.kind === "turn-fold" && `turn-fold:${row.runId}` === anchorKey,
+    );
+    navigateTimeline();
+    motion.capture(header?.id ?? anchorKey);
+    return true;
+  };
   const rowState: ForkTimelineRowState = {
-    activityImmediate: immediate,
+    activityImmediate: immediate || settling,
     seenAssistantMessages: visit.seen,
     onPresentationPendingChange: presentation.onPresentationPendingChange,
     presentedAssistantMessages: visit.completed,
     pendingAssistantMessages: visit.pending,
+    onWorkEntryToggle: captureDisclosure,
     workGroupViewState: input.workGroupViewState,
   };
   const fork = {
     rowState,
+    exits,
+    /** Replaces upstream's disclosure anchoring: motion keeps the toggled row in place. */
+    captureDisclosure,
+    /** Motion's pinned rows, kept mounted ahead of upstream's. */
+    alwaysRenderKeys: pins,
     withRowFrame:
       <Info extends { item: MessagesTimelineRow }>(render: (info: Info) => ReactNode) =>
-      (info: Info) => <ForkTimelineRowCtx value={rowState}>{render(info)}</ForkTimelineRowCtx>,
+      (info: Info) => {
+        const { item } = info;
+        return (
+          <ForkTimelineRowCtx value={rowState}>
+            <TimelineMotionRow
+              key={`${identity}:${item.id}`}
+              entry={item}
+              motion={motion}
+              id={item.id}
+              exiting={exits.has(item.id)}
+              presentationPending={item.kind === "message" && visit.pending.has(item.message.id)}
+              closingChildren={
+                (item.kind === "work-live" || item.kind === "work-toggle") &&
+                closingGroups.has(item.groupId)
+              }
+            >
+              {render(info)}
+            </TimelineMotionRow>
+          </ForkTimelineRowCtx>
+        );
+      },
+    /** Spread last on the list: extends upstream's `onItemSizeChanged`, replaces the rest. */
+    listProps: (upstream: { onItemSizeChanged: () => void }): ForkListProps => ({
+      onItemSizeChanged: () => {
+        motion.layoutChanged();
+        upstream.onItemSizeChanged();
+      },
+      // Follow scrolls to the end itself, after motion lays rows out.
+      maintainScrollAtEnd: false,
+      maintainVisibleContentPosition:
+        findExpanded || citationPositioning || input.restoringThreadPosition
+          ? false
+          : prepended
+            ? true
+            : KEEP_READING_POSITION_ON_RESIZE,
+    }),
+    /** Motion; attach before follow. */
+    attach: (viewport: TimelineViewport | null, list: LegendListRef | null) => {
+      if (!viewport || !list) return () => {};
+      const detachMotion = motion.attach(viewport, list);
+      // Resizing the viewport moves the end without changing any content size; follow keeps up
+      // without a tween, as during motion.
+      let height = viewport.scrollNode.clientHeight;
+      const stopResize = observeResize(viewport.scrollNode, () => {
+        if (viewport.scrollNode.clientHeight === height) return;
+        height = viewport.scrollNode.clientHeight;
+        viewport.layoutChanged(true);
+      });
+      return () => {
+        stopResize();
+        detachMotion();
+      };
+    },
+    /** The content size schedule, which replaces upstream's; attach after follow. */
+    attachAfterFollow: (
+      viewport: TimelineViewport | null,
+      list: LegendListRef | null,
+      onContentSizeChanged: () => void,
+    ) => {
+      let contentSizeFrame: number | null = null;
+      // LegendList lays rows out from layout effects; the next frame sees them settled.
+      const scheduleContentSizeChanged = () => {
+        if (!list) return;
+        motion.layoutChanged();
+        if (contentSizeFrame !== null) return;
+        contentSizeFrame = requestAnimationFrame(() => {
+          contentSizeFrame = null;
+          viewport?.layoutChanged(motion.isAnimating());
+          onContentSizeChanged();
+        });
+      };
+      const stopListeningToContentSize = list
+        ?.getState()
+        .listen("totalSize", scheduleContentSizeChanged);
+      const stopListeningToFooterSize = list
+        ?.getState()
+        .listen("footerSize", scheduleContentSizeChanged);
+      scheduleContentSizeChanged();
+      return () => {
+        stopListeningToContentSize?.();
+        stopListeningToFooterSize?.();
+        if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);
+      };
+    },
   };
   return [rows, fork] as const;
 }
 
+/** Ends the opening settle a frame after the list lays out the shown thread's first synced rows. */
+export function useForkTimelineSettle(
+  presentation: ForkTimelinePresentation,
+  showsEmptyState: boolean,
+) {
+  const { identity, setSettledIdentity } = presentation;
+  const settleReady = presentation.settling && presentation.synced && !showsEmptyState;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- ends the opening settle a frame after LegendList lays out the shown thread's first synced rows
+  useLayoutEffect(() => {
+    if (!settleReady) return;
+    const frame = requestAnimationFrame(() => setSettledIdentity(identity));
+    return () => cancelAnimationFrame(frame);
+  }, [identity, settleReady, setSettledIdentity]);
+}
+
 /** LegendList item types for the fork's rows; `undefined` leaves the row to upstream. */
 export function forkTimelineItemType(item: MessagesTimelineRow): string | undefined {
+  if (item.kind === "working" || item.kind === "turn-fold") return "turn-status";
   if (
     item.kind === "work-live" ||
     item.kind === "work-toggle" ||
