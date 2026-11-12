@@ -1,15 +1,12 @@
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import { TERMINAL_PALETTES, terminalOutputSpans } from "@t3tools/shared/terminalOutput";
-import { useLayoutEffect, useRef } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
 import { useServerConfigs } from "../../state/entities";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
 import { useInitialOutputReady, type TurnItemSource } from "./timelineRowContext";
-
-const FOLLOW_SLACK_PX = 8;
 
 export function useCommandOutputStreaming(environmentId: EnvironmentId): boolean {
   return (
@@ -37,34 +34,22 @@ export function CommandOutputPanel(props: {
       : orchestrationEnvironment.v2.commandOutput({ environmentId: props.environmentId, input }),
   );
   useInitialOutputReady(data === null && !error, props.onInitialOutputReady);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const followRef = useRef(true);
   const text = data?.output.text ?? "";
   const { resolvedTheme } = useTheme();
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pins the output scroller's scrollTop to the bottom after each commit while the user follows
-  useLayoutEffect(() => {
-    const element = scrollRef.current;
-    if (element && followRef.current) element.scrollTop = element.scrollHeight;
-  });
 
   if (text.length === 0) {
     if (error) return <div className="text-destructive">Couldn&apos;t load output: {error}</div>;
     if (data === null) return <div className="text-muted-foreground italic">Loading output…</div>;
-    return data.running ? null : <div className="text-muted-foreground italic">No output.</div>;
+    return (
+      <div className="text-muted-foreground italic">
+        {data.running ? "Waiting for output…" : "No output"}
+      </div>
+    );
   }
   // Parse after all hooks to preserve the text/theme compiler cache.
   const spans = terminalOutputSpans(text, TERMINAL_PALETTES[resolvedTheme]);
   return (
-    <div
-      ref={scrollRef}
-      onScroll={(event) => {
-        const element = event.currentTarget;
-        followRef.current =
-          element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_SLACK_PX;
-      }}
-      className="max-h-80 overflow-auto text-muted-foreground"
-    >
+    <div className="min-w-0 wrap-anywhere text-muted-foreground">
       {data?.output.truncated ? <div className="italic">Earlier output not shown</div> : null}
       {spans.map((span, index) =>
         span.style === null ? (
