@@ -1,4 +1,5 @@
 import type * as DateTime from "effect/DateTime";
+import { identity } from "effect/Function";
 import { msg } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -159,9 +160,18 @@ export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadSh
 }
 
 /** The shell without its streaming timestamps; see quietThreadShellAtom. */
-export function useQuietThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadShell | null {
+export function useQuietThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadShell | null;
+export function useQuietThreadShell<A>(
+  ref: ScopedThreadRef | null,
+  select: (thread: EnvironmentThreadShell | null) => A,
+): A;
+export function useQuietThreadShell(
+  ref: ScopedThreadRef | null,
+  select: (thread: EnvironmentThreadShell | null) => unknown = identity,
+) {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_SHELL_ATOM : environmentThreadShells.quietThreadShellAtom(ref),
+    select,
   );
 }
 
@@ -185,9 +195,18 @@ export function useThreadProjection(ref: ScopedThreadRef | null): EnvironmentThr
 /** The thread's structure, held through streamed assistant and reasoning text; see ThreadStructure. */
 export function useQuietThreadProjection(
   ref: ScopedThreadRef | null,
-): EnvironmentThreadStructure | null {
+): EnvironmentThreadStructure | null;
+export function useQuietThreadProjection<A>(
+  ref: ScopedThreadRef | null,
+  select: (thread: EnvironmentThreadStructure | null) => A,
+): A;
+export function useQuietThreadProjection(
+  ref: ScopedThreadRef | null,
+  select: (thread: EnvironmentThreadStructure | null) => unknown = identity,
+) {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_PROJECTION_ATOM : environmentThreadDetails.quietThreadAtom(ref),
+    select,
   );
 }
 
