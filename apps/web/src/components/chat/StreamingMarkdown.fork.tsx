@@ -17,12 +17,20 @@ type Props = ComponentProps<typeof ChatMarkdown> & {
   seenMessages: Set<string>;
   animateInitial: boolean;
   immediate: boolean;
+  paused?: boolean;
   onPendingChange: (messageId: string, pending: boolean, textLength: number) => void;
 };
 
 export function StreamingMarkdown(props: Props) {
-  const { messageId, seenMessages, animateInitial, immediate, onPendingChange, ...markdown } =
-    props;
+  const {
+    messageId,
+    seenMessages,
+    animateInitial,
+    immediate,
+    paused = false,
+    onPendingChange,
+    ...markdown
+  } = props;
   const startPresentation = (generation: number) => ({
     seenMessages,
     generation,
@@ -51,6 +59,7 @@ export function StreamingMarkdown(props: Props) {
       messageId={messageId}
       initiallyVisible={presentation.initiallyVisible}
       immediate={immediate}
+      paused={paused}
       onPendingChange={onPendingChange}
     />
   ) : (
@@ -62,12 +71,14 @@ function PresentedMarkdown({
   messageId,
   initiallyVisible,
   immediate,
+  paused,
   onPendingChange,
   ...markdown
 }: ComponentProps<typeof ChatMarkdown> & {
   messageId: string;
   initiallyVisible: boolean;
   immediate: boolean;
+  paused: boolean;
   onPendingChange: Props["onPendingChange"];
 }) {
   const [presentation] = useState(() =>
@@ -113,9 +124,9 @@ function PresentedMarkdown({
   }, [retained, presentation]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies each committed source update before paint while presentation frames stay outside React
   useLayoutEffect(() => {
-    presentation.update(markdown.text, immediate || reducedMotion || document.hidden);
+    presentation.update(markdown.text, immediate || reducedMotion || document.hidden, paused);
     reveal.current?.refresh();
-  }, [presentation, markdown.text, immediate, reducedMotion]);
+  }, [presentation, markdown.text, immediate, reducedMotion, paused]);
   const finishPresentation = useStableCallback(() =>
     onPendingChange(messageId, false, markdown.text.length),
   );
