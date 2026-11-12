@@ -9,7 +9,7 @@ const INSIGHT_OPEN_PATTERN = /^( {0,3})(`?)★ Insight[ \t]+─{3,}\2[ \t]*$/u;
 const INSIGHT_CLOSE_PATTERN = /^( {0,3})(`?)─{3,}\2[ \t]*$/u;
 
 /**
- * Cuts Markdown at blank lines that close every open block, so each piece renders exactly as it
+ * Cuts Markdown at closed block boundaries, so each piece renders exactly as it
  * would inside the whole text. Returns null when the text uses syntax that spans blocks.
  */
 export function splitMarkdownBlocks(text: string): string[] | null {
@@ -21,8 +21,12 @@ export function splitMarkdownBlocks(text: string): string[] | null {
   let fenceIndent = 0;
   let afterBlankLine = false;
   let insightIndent: string | null = null;
+  let afterFence = false;
   for (const line of text.split("\n")) {
     const opener = FENCE_PATTERN.exec(line)?.[1];
+    const opensFence =
+      opener !== undefined &&
+      (opener[0] !== "`" || !line.slice(line.indexOf(opener) + opener.length).includes("`"));
     if (fence !== null) {
       // A line left of an indented fence may end the list item holding it, which isn't tracked.
       if (/\S/.test(line.slice(0, fenceIndent))) break;
@@ -32,6 +36,7 @@ export function splitMarkdownBlocks(text: string): string[] | null {
         opener.length >= fence.length &&
         line.trim() === opener
       ) {
+        afterFence = fenceIndent === 0 && insightIndent === null;
         fence = null;
       }
     } else if (insightIndent !== null && INSIGHT_CLOSE_PATTERN.exec(line)?.[1] === insightIndent) {
@@ -41,17 +46,19 @@ export function splitMarkdownBlocks(text: string): string[] | null {
       afterBlankLine = true;
     } else {
       if (
-        afterBlankLine &&
         insightIndent === null &&
         lineStart > blockStart &&
-        !CONTINUATION_PATTERN.test(line)
+        (afterFence ||
+          (afterBlankLine && !CONTINUATION_PATTERN.test(line)) ||
+          (opensFence && line.startsWith(opener)))
       ) {
         blocks.push(text.slice(blockStart, lineStart));
         blockStart = lineStart;
       }
       afterBlankLine = false;
+      afterFence = false;
       if (insightIndent === null) insightIndent = INSIGHT_OPEN_PATTERN.exec(line)?.[1] ?? null;
-      fence = opener ?? null;
+      fence = opensFence ? opener : null;
       if (opener) fenceIndent = line.indexOf(opener);
     }
     lineStart += line.length + 1;
