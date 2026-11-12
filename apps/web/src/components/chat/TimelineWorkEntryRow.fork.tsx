@@ -1,6 +1,7 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import { WorkLogDetails, WorkLogDisclosureIndicator, WorkLogIcon, WorkLogRow } from "./WorkLog";
 import { TimelineDisclosure } from "./timelineMotion.fork";
+import { observeStuckLine } from "./timelineStuckLine.fork";
 import {
   getQuestionAnswerPreview,
   getQuestionAnswerText,
@@ -28,7 +29,15 @@ import {
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { claudeSkillInvocation } from "@t3tools/shared/toolActivity";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { memo, use, useState, type KeyboardEvent } from "react";
+import {
+  memo,
+  use,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import {
   workEntryDisplayIndicatesToolFailure,
   workEntrySignalsSevereFailure,
@@ -58,7 +67,7 @@ import {
   TimelineRowActivityCtx,
   type TimelineWorkEntry,
 } from "./timelineRowContext";
-import { ForkWorkGroupViewCtx } from "./timelineRowContext.fork";
+import { ForkWorkGroupViewCtx, type WorkEntryToggle } from "./timelineRowContext.fork";
 import { MESSAGE_HEADING_LEVEL, TimelineRowTimestamp } from "./TimelineRowParts";
 import {
   failedToolIconClassName,
@@ -237,11 +246,32 @@ function ReasoningTraceContent({
   });
 }
 
+/**
+ * Rendered in an entry's disclosure, so its header line sticks for as long as the body is shown,
+ * including while it closes.
+ */
+function StickyEntryLine({ line }: { line: RefObject<HTMLDivElement | null> }) {
+  const { listRef } = use(TimelineRowCtx);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- marks the line sticky before paint and observes whether it sticks in the timeline's scroll node
+  useLayoutEffect(() => {
+    const element = line.current;
+    const root = listRef.current?.getScrollableNode();
+    if (!element || !(root instanceof HTMLElement)) return;
+    element.toggleAttribute("data-sticky", true);
+    const stopObserving = observeStuckLine(element, root);
+    return () => {
+      stopObserving();
+      element.removeAttribute("data-sticky");
+    };
+  }, [line, listRef]);
+  return null;
+}
+
 type WorkEntryRowProps = {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
   displayLabel?: string | undefined;
-  onToggleEntry?: (() => void) | undefined;
+  onToggleEntry?: ((toggle: WorkEntryToggle) => void) | undefined;
   /** The active status's detail, which shows only the latest thought of a reasoning entry. */
   preview?: boolean | undefined;
 };
@@ -294,18 +324,23 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? (groupView?.state.expandedPreviewRuns.has(runKey) ?? false)
       : (groupView?.state.expandedEntries.has(workEntry.id) ?? false),
   );
-  const toggleExpanded = () => {
+  const lineRef = useRef<HTMLDivElement>(null);
+  const toggleExpanded = (event: { readonly currentTarget: HTMLElement }) => {
     const next = !expanded;
+    const line = lineRef.current;
+    const toggle = line
+      ? { entry: event.currentTarget, line, expanding: next, preview: props.preview === true }
+      : undefined;
     if (groupView) {
-      groupView.onToggleEntry();
+      if (toggle) groupView.onToggleEntry(toggle);
       const { expandedEntries, expandedPreviewRuns } = groupView.state;
       if (props.preview) {
         if (next) expandedPreviewRuns.add(runKey);
         else expandedPreviewRuns.delete(runKey);
       } else if (next) expandedEntries.add(workEntry.id);
       else expandedEntries.delete(workEntry.id);
-    } else {
-      props.onToggleEntry?.();
+    } else if (toggle) {
+      props.onToggleEntry?.(toggle);
     }
     setExpanded(next);
   };
@@ -503,7 +538,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
-            toggleExpanded();
+            toggleExpanded(e);
           }
         },
       }
@@ -514,6 +549,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       data-work-entry-id={workEntry.id}
       data-v2-item-type={workEntry.projectedItem?.item.type}
       data-v2-item-visibility={workEntry.projectedItem?.visibility}
+      lineRef={lineRef}
       {...rowToggleProps}
       icon={
         <span
@@ -605,6 +641,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       }
     >
       <TimelineDisclosure open={expanded}>
+        <StickyEntryLine line={lineRef} />
         {expanded && viewedImage && threadRef ? (
           <WorkLogDetails kind="media">
             <ChatMarkdownAssetImage
