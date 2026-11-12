@@ -1934,12 +1934,14 @@ function ChatMarkdown({
   renderInsights = false,
   ...props
 }: ChatMarkdownProps) {
+  const [hasStreamed, setHasStreamed] = useState(props.isStreaming === true);
+  if (props.isStreaming === true && !hasStreamed) setHasStreamed(true);
   const { componentState, handleCopy, markdownRef, localMediaPreview, closeLocalMediaPreview } =
     useChatMarkdownState({ text, inline, ...props });
   const hasInsights = renderInsights && text.includes("★ Insight");
   // Streaming re-renders only the last block; offsets for task edits need the whole text.
   const streamingBlocks =
-    props.isStreaming === true &&
+    (props.isStreaming === true || hasStreamed) &&
     !inline &&
     extraRemarkPlugins.length === 0 &&
     !props.onTaskListChange
