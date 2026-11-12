@@ -22,6 +22,7 @@ import ProjectScriptsControl, {
 import { T, useGT } from "gt-react";
 import { useState, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
+import { ThreadTasksPanel } from "./ThreadTasksPanel.fork";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
@@ -158,6 +159,11 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
       anchor={props.anchor}
       handle={props.handle}
+      after={
+        !props.draftId ? (
+          <ThreadTasksPanel environmentId={props.environmentId} threadId={props.threadId} />
+        ) : undefined
+      }
       contentKey={THREAD_DETAILS_ITEMS.filter((item) => visible[item.id])
         .map((item) => item.id)
         .join(",")}
