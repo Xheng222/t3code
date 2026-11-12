@@ -54,6 +54,9 @@ describe("transitionTimelineFollow", () => {
     const away = transitionTimelineFollow(releasedAtEnd, { type: "leftEnd" });
     expect(away).toEqual(releasedAway);
     expect(transitionTimelineFollow(away, { type: "reachedEnd" })).toBe(FOLLOWING);
+    expect(transitionTimelineFollow(away, { type: "reachedEnd", rearm: false })).toEqual(
+      releasedAtEnd,
+    );
   });
 
   it("follows the end on request from any state", () => {

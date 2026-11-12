@@ -68,6 +68,7 @@ function createVisitScrollState(
     showScrollDebouncer: new Debouncer(() => showScrollToBottom(visit), { wait: 150 }),
     positionedAnchor: null as MessageId | null,
     settledAnchor: null as MessageId | null,
+    resumeOnScroll: false,
     releaseAnchorScrollHold: null as (() => void) | null,
     pendingAnchorScrollRestore: null as {
       readonly messageId: MessageId;
@@ -245,7 +246,16 @@ export function useTimelineFollow(input: TimelineFollowInput) {
       cancelAnimationFrame(scroll.anchorScrollRestoreFrame);
       scroll.anchorScrollRestoreFrame = null;
     }
-    if (before.mode === "following") legendListRef.current?.cancelScroll();
+    if (before.mode === "following") {
+      const list = legendListRef.current;
+      list?.cancelScroll();
+      // Layout follow also starts smooth DOM scrolls outside the list's tracker.
+      const node = list?.getScrollableNode() as HTMLElement | undefined;
+      if (node) {
+        const top = node.scrollTop;
+        node.scrollTop = top;
+      }
+    }
   };
 
   // A run that starts while the live end is followed anchors its user message
@@ -289,6 +299,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
       // Through the viewport, so a running position restore stops too.
       viewportRef.current?.navigate({ releasesFollow: true });
     }
+    visitScroll().resumeOnScroll = true;
   });
   const onComposerPageScrollKeyDown = (key: PageScrollKey) => {
     pageScrollControllerRef.current?.handleKeyDown(key);
@@ -335,10 +346,13 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   useLayoutEffect(() => {
     const grew = composerTimelineInset > followedInsetRef.current;
     followedInsetRef.current = composerTimelineInset;
-    if (grew && readCurrentFollow().mode === "following") scrollToEndStable();
-  }, [composerTimelineInset, readCurrentFollow, scrollToEndStable]);
+    if (grew) viewportRef.current?.layoutChanged(false);
+  }, [composerTimelineInset]);
 
   const handleNavigation = (navigation: TimelineNavigation) => {
+    if (navigation.source === "command") visitScroll().resumeOnScroll = false;
+    else if (navigation.source !== "pointer" || navigation.onScrollbar)
+      visitScroll().resumeOnScroll = true;
     const awayFromEnd = () => resolveTimelineIsAtEnd(legendListRef.current?.getState()) === false;
     const releases = navigationReleasesFollow(navigation, {
       contentScrollsUp: timelineRealContentOverflowsViewport,
@@ -347,6 +361,24 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     if (releases) releaseFollowForNavigation();
   };
   const handleNavigationStable = useStableCallback(handleNavigation);
+  const followLayoutStable = useStableCallback((viewport: TimelineViewport, animating: boolean) => {
+    if (
+      viewportRef.current !== viewport ||
+      readFollow().mode !== "following" ||
+      timelineAnchorMessageId !== null
+    )
+      return;
+    const node = viewport.scrollNode;
+    const end = Math.max(0, measuredEndOffset(node));
+    if (Math.abs(node.scrollTop - end) <= 1) return;
+    node.scrollTo({
+      top: end,
+      behavior:
+        animating || window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+    });
+  });
   /**
    * Attached by the timeline's list ref callback, so follow hears the
    * viewport's navigation exactly as long as the scroll node exists.
@@ -354,6 +386,21 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   const attachTimelineViewport = (viewport: TimelineViewport) => {
     viewportRef.current = viewport;
     const unsubscribe = viewport.subscribe(handleNavigationStable);
+    let attached = true;
+    let layoutQueued = false;
+    let regionAnimating = false;
+    let followWithoutTween = false;
+    const stopLayout = viewport.onLayoutChanged((animating) => {
+      followWithoutTween = followWithoutTween || animating || regionAnimating;
+      regionAnimating = animating;
+      if (layoutQueued) return;
+      layoutQueued = true;
+      queueMicrotask(() => {
+        layoutQueued = false;
+        if (attached) followLayoutStable(viewport, followWithoutTween);
+        followWithoutTween = false;
+      });
+    });
     const controller = createPageScrollController({
       getContainer: () => viewport.scrollNode,
       getScrollPaddingBottomPx: followStore.readComposerOverlayHeight,
@@ -362,6 +409,8 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     pageScrollControllerRef.current = controller;
     return () => {
       unsubscribe();
+      stopLayout();
+      attached = false;
       controller.dispose();
       if (pageScrollControllerRef.current === controller) pageScrollControllerRef.current = null;
       if (viewportRef.current === viewport) viewportRef.current = null;
@@ -463,7 +512,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   // The list ignores footer layout, so a new queued turn or status line there would land
   // under the composer. Follow it when the reader was following the end.
   const onTimelineFooterGrow = () => {
-    if (readFollow().mode === "following") scrollToEndStable();
+    viewportRef.current?.layoutChanged(false);
   };
   const onTimelineFooterGrowStable = useStableCallback(onTimelineFooterGrow);
 
@@ -474,12 +523,13 @@ export function useTimelineFollow(input: TimelineFollowInput) {
       setShowScrollToBottom(false);
       return;
     }
-    const { before, after } = followStore.dispatch(visit, {
-      type: isAtEnd ? "reachedEnd" : "leftEnd",
-    });
+    const { before, after } = followStore.dispatch(
+      visit,
+      isAtEnd ? { type: "reachedEnd", rearm: scroll.resumeOnScroll } : { type: "leftEnd" },
+    );
     if (after === before) return;
-    if (after.mode === "following") {
-      setTimelineAnchor(releaseChatTimelineAnchor);
+    if (isAtEnd) {
+      if (after.mode === "following") setTimelineAnchor(releaseChatTimelineAnchor);
       scroll.showScrollDebouncer.cancel();
       setShowScrollToBottom(false);
     } else {
