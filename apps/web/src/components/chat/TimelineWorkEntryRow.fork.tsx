@@ -1,5 +1,6 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import { WorkLogDetails, WorkLogIcon, WorkLogRow } from "./WorkLog";
+import { TimelineDisclosure, TimelineDisclosureIndicator } from "./timelineMotion.fork";
 import {
   getQuestionAnswerPreview,
   getQuestionAnswerText,
@@ -37,7 +38,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { workGroupImageGallery } from "./markdownImageGallery";
-import { ChevronRightIcon, CircleAlertIcon, XIcon, RotateCcwIcon } from "lucide-react";
+import { CircleAlertIcon, XIcon, RotateCcwIcon } from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
 import { useAssetUrls } from "../../assets/assetUrls";
 import { useThreadShell } from "../../state/entities";
@@ -240,7 +241,7 @@ type WorkEntryRowProps = {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
   displayLabel?: string | undefined;
-  onToggleEntry?: ((collapsed: boolean) => void) | undefined;
+  onToggleEntry?: (() => void) | undefined;
   /** The active status's detail, which shows only the latest thought of a reasoning entry. */
   preview?: boolean | undefined;
 };
@@ -296,7 +297,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
   const toggleExpanded = () => {
     const next = !expanded;
     if (groupView) {
-      groupView.onToggleEntry(!next);
+      groupView.onToggleEntry();
       const { expandedEntries, expandedPreviewRuns } = groupView.state;
       if (props.preview) {
         if (next) expandedPreviewRuns.add(runKey);
@@ -304,7 +305,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       } else if (next) expandedEntries.add(workEntry.id);
       else expandedEntries.delete(workEntry.id);
     } else {
-      props.onToggleEntry?.(!next);
+      props.onToggleEntry?.();
     }
     setExpanded(next);
   };
@@ -602,11 +603,9 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           ) : null}
           {canExpandProjectedItem ? (
             <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
-              <ChevronRightIcon
-                className={cn(
-                  "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                  expanded && "rotate-90",
-                )}
+              <TimelineDisclosureIndicator
+                expanded={expanded}
+                className="size-3 text-icon-muted opacity-70"
               />
             </span>
           ) : null}
@@ -614,68 +613,70 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
-      {expanded && viewedImage && threadRef ? (
-        <WorkLogDetails kind="media">
-          <ChatMarkdownAssetImage
-            environmentId={threadRef.environmentId}
-            resource={viewedImage.resource}
-            alt={viewedImage.alt}
-            srcFragment={viewedImage.srcFragment}
-            workspaceRoot={workspaceRoot}
-            maxHeightRem={16}
-            onImageExpand={expandImage}
-          />
-        </WorkLogDetails>
-      ) : null}
-      {expanded && workEntry.questionAnswer ? (
-        <QuestionAnswerHistory answer={workEntry.questionAnswer} />
-      ) : null}
-      {expanded &&
-      !workEntry.questionAnswer &&
-      canExpandProjectedItem &&
-      (expandedBody ||
-        fallbackCommand ||
-        plainOutputFetches ||
-        (workEntry.projectedItem && plainOutput === undefined)) ? (
-        <WorkLogDetails kind="panel">
-          {fallbackCommand ? (
-            <ToolCallBody
-              command={fallbackCommand}
-              output={workEntry.detail ?? null}
-              images={[]}
-              environmentId={ctx.activeThreadEnvironmentId}
-              pending={false}
-              error={null}
-              empty
-              running={workEntry.toolLifecycleStatus === "inProgress"}
-            />
-          ) : workEntry.projectedItem && plainOutput === undefined ? (
-            <V2ItemInspector
-              projectedItem={workEntry.projectedItem}
-              environmentId={ctx.activeThreadEnvironmentId}
-              cwd={ctx.markdownCwd}
+      <TimelineDisclosure open={expanded}>
+        {expanded && viewedImage && threadRef ? (
+          <WorkLogDetails kind="media">
+            <ChatMarkdownAssetImage
+              environmentId={threadRef.environmentId}
+              resource={viewedImage.resource}
+              alt={viewedImage.alt}
+              srcFragment={viewedImage.srcFragment}
               workspaceRoot={workspaceRoot}
-              onOpenToolDiff={ctx.onOpenToolDiff}
+              maxHeightRem={16}
               onImageExpand={expandImage}
-              source={ctx.turnItemSource}
             />
-          ) : (
-            <>
-              {expandedBody ? (
-                <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
-              ) : null}
-              {plainOutputFetches && workEntry.projectedItem ? (
-                <FetchedToolOutput
-                  projectedItem={workEntry.projectedItem}
-                  environmentId={ctx.activeThreadEnvironmentId}
-                  onImageExpand={expandImage}
-                  source={ctx.turnItemSource}
-                />
-              ) : null}
-            </>
-          )}
-        </WorkLogDetails>
-      ) : null}
+          </WorkLogDetails>
+        ) : null}
+        {expanded && workEntry.questionAnswer ? (
+          <QuestionAnswerHistory answer={workEntry.questionAnswer} />
+        ) : null}
+        {expanded &&
+        !workEntry.questionAnswer &&
+        canExpandProjectedItem &&
+        (expandedBody ||
+          fallbackCommand ||
+          plainOutputFetches ||
+          (workEntry.projectedItem && plainOutput === undefined)) ? (
+          <WorkLogDetails kind="panel">
+            {fallbackCommand ? (
+              <ToolCallBody
+                command={fallbackCommand}
+                output={workEntry.detail ?? null}
+                images={[]}
+                environmentId={ctx.activeThreadEnvironmentId}
+                pending={false}
+                error={null}
+                empty
+                running={workEntry.toolLifecycleStatus === "inProgress"}
+              />
+            ) : workEntry.projectedItem && plainOutput === undefined ? (
+              <V2ItemInspector
+                projectedItem={workEntry.projectedItem}
+                environmentId={ctx.activeThreadEnvironmentId}
+                cwd={ctx.markdownCwd}
+                workspaceRoot={workspaceRoot}
+                onOpenToolDiff={ctx.onOpenToolDiff}
+                onImageExpand={expandImage}
+                source={ctx.turnItemSource}
+              />
+            ) : (
+              <>
+                {expandedBody ? (
+                  <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
+                ) : null}
+                {plainOutputFetches && workEntry.projectedItem ? (
+                  <FetchedToolOutput
+                    projectedItem={workEntry.projectedItem}
+                    environmentId={ctx.activeThreadEnvironmentId}
+                    onImageExpand={expandImage}
+                    source={ctx.turnItemSource}
+                  />
+                ) : null}
+              </>
+            )}
+          </WorkLogDetails>
+        ) : null}
+      </TimelineDisclosure>
     </WorkLogRow>
   );
 }
