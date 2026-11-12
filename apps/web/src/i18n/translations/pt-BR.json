@@ -1,4 +1,7 @@
 {
+  "fae3639874428042": "Tarefas",
+  "fb976abe5b22bbe6": "Tarefas",
+  "6ee23496bef7845d": "{status, select, completed {Completed: {text}} running {In progress: {text}} other {Pending: {text}}}",
   "6c6e16b9488f8b91": "Role para ler tudo.",
   "035aab5e99159bd8": "{count, plural, one {… {hidden} caractere do meio não é exibido.} other {… {hidden} caracteres do meio não são exibidos.}} O texto termina com:",
   "011b1ef726fa9928": "Role cada parte para ler tudo.",

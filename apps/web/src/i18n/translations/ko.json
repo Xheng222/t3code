@@ -1,4 +1,7 @@
 {
+  "fae3639874428042": "작업",
+  "fb976abe5b22bbe6": "작업",
+  "6ee23496bef7845d": "{status, select, completed {Completed: {text}} running {In progress: {text}} other {Pending: {text}}}",
   "6c6e16b9488f8b91": "스크롤하여 전체를 읽으세요.",
   "035aab5e99159bd8": "{count, plural, other {… 중간의 {hidden}자는 표시되지 않습니다.}} 텍스트의 끝부분:",
   "011b1ef726fa9928": "각 부분을 스크롤하여 전체를 읽으세요.",

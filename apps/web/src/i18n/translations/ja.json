@@ -1,4 +1,7 @@
 {
+  "fae3639874428042": "タスク",
+  "fb976abe5b22bbe6": "タスク",
+  "6ee23496bef7845d": "{status, select, completed {Completed: {text}} running {In progress: {text}} other {Pending: {text}}}",
   "6c6e16b9488f8b91": "スクロールしてすべて読んでください。",
   "035aab5e99159bd8": "{count, plural, other {… 途中の {hidden} 文字は表示されていません。}} テキストの末尾:",
   "011b1ef726fa9928": "それぞれの部分をスクロールしてすべて読んでください。",

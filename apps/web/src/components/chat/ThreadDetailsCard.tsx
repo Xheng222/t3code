@@ -26,6 +26,7 @@ export function ThreadDetailsCard({
   handle,
   contentKey,
   onContextMenu,
+  after,
   children,
 }: {
   threadRef: ScopedThreadRef;
@@ -34,6 +35,7 @@ export function ThreadDetailsCard({
   /** Changes when the set of rendered items changes, so cached heights are measured again. */
   contentKey: string;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
+  after?: ReactNode;
   children: (density: "full" | "compact" | "essential") => ReactNode;
 }) {
   const gt = useGT();
@@ -53,6 +55,7 @@ export function ThreadDetailsCard({
   const [measurements, setMeasurements] = useState({
     key: measurementKey,
     heights: { full: 0, compact: 0 },
+    afterHeight: 0,
   });
   const contentHeights =
     measurements.key === measurementKey ? measurements.heights : { full: 0, compact: 0 };
@@ -76,10 +79,25 @@ export function ThreadDetailsCard({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the card's DOM height via ResizeObserver and reports it to the canvas
   useLayoutEffect(() => {
     const element = contentElement;
-    if (!element || density === "essential") return;
+    if (!element) return;
+    const extra = element
+      .closest("[data-thread-details-stack]")
+      ?.querySelector<HTMLElement>("[data-thread-details-after]");
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
-      const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
+      const extraHeight = extra?.offsetHeight ?? 0;
+      if (density === "essential") {
+        setMeasurements((current) =>
+          current.key === measurementKey && current.afterHeight === extraHeight
+            ? current
+            : { key: measurementKey, afterHeight: extraHeight, heights: { full: 0, compact: 0 } },
+        );
+        return;
+      }
+      const next =
+        element.offsetHeight +
+        (frame ? frame.offsetHeight - frame.clientHeight : 0) +
+        (extraHeight > 0 ? extraHeight + 12 : 0);
       // PR and issue lists, servers, repositories, lineage, side chats and automations scroll as they grow.
       // Counting them toward density would hide the section and workspace controls when the user asks to see more.
       const lists = element.querySelectorAll<HTMLElement>(
@@ -88,10 +106,16 @@ export function ThreadDetailsCard({
       const fittingHeight =
         next - Array.from(lists).reduce((sum, list) => sum + list.offsetHeight, 0);
       setMeasurements((current) => {
-        const heights = current.key === measurementKey ? current.heights : { full: 0, compact: 0 };
-        return current.key === measurementKey && heights[density] === fittingHeight
+        const sameAfter = current.afterHeight === extraHeight;
+        const heights =
+          current.key === measurementKey && sameAfter ? current.heights : { full: 0, compact: 0 };
+        return current.key === measurementKey && sameAfter && heights[density] === fittingHeight
           ? current
-          : { key: measurementKey, heights: { ...heights, [density]: fittingHeight } };
+          : {
+              key: measurementKey,
+              afterHeight: extraHeight,
+              heights: { ...heights, [density]: fittingHeight },
+            };
       });
       // Only the laid-out DOM knows the full card height, and the canvas keeps preview
       // frames clear of it, so it is reported from this measure effect.
@@ -104,7 +128,7 @@ export function ThreadDetailsCard({
       }
     };
     measure();
-    return observeResize(element, measure);
+    return observeResize(extra ? [element, extra] : element, measure);
   }, [
     contentElement,
     density,
@@ -129,6 +153,16 @@ export function ThreadDetailsCard({
         <div ref={setContentElement}>{children(density)}</div>
       </ScrollArea>
     </div>
+  );
+  const stack = after ? (
+    <div className="flex min-h-0 max-h-full flex-col gap-3" data-thread-details-stack>
+      {card}
+      <div className="shrink-0 empty:hidden" data-thread-details-after>
+        {after}
+      </div>
+    </div>
+  ) : (
+    card
   );
   return (
     <Popover
@@ -166,7 +200,7 @@ export function ThreadDetailsCard({
           data-density={density}
           data-thread-details-panel="inline"
         >
-          {card}
+          {stack}
         </aside>
       ) : null}
       {/* Rendered in both modes: base-ui keeps a popup that unmounts mid-open
@@ -192,7 +226,7 @@ export function ThreadDetailsCard({
       >
         {mode === "popover" ? (
           <div data-density={density} data-thread-details-panel="popover">
-            {card}
+            {stack}
           </div>
         ) : null}
       </PopoverPopup>
