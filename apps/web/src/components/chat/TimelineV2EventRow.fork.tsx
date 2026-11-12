@@ -72,7 +72,7 @@ export const V2SubagentGroup = memo(function V2SubagentGroup({
     }
   }
   const toggle = () => {
-    forkCtx.onWorkEntryToggle(row.id);
+    ctx.onToggleWorkEntry(row.id, expanded);
     if (expanded) ctx.workGroupViewState.expandedEntries.delete(groupId);
     else ctx.workGroupViewState.expandedEntries.add(groupId);
     setExpanded(!expanded);
