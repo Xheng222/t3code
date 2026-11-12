@@ -454,3 +454,131 @@ it("preserves a closing group's trailing space through cleanup", async () => {
   expect(heightAfterRemoval).toBe(32);
   expect(followingTop()).toBe(32);
 });
+
+it("skips an opening's parts out of view, scrolling past a skipped top only while most of the view is below it", async () => {
+  // This exercises the layout coordinator without navigation or RPCs.
+  await using screen = await render(
+    <div data-testid="viewport" style={{ height: 300, overflow: "auto" }} />,
+    { router: false },
+  );
+  using _observer = stubGlobal("ResizeObserver", undefined);
+  using _timers = fakeTimers();
+  using cleanup = new DisposableStack();
+  const viewport = screen.container.querySelector<HTMLDivElement>("[data-testid=viewport]")!;
+  const block = (height: number) => {
+    const element = document.createElement("div");
+    element.style.height = `${height}px`;
+    return element;
+  };
+  const makeRow = (...children: HTMLElement[]) => {
+    const element = document.createElement("div");
+    const content = document.createElement("div");
+    content.append(...children);
+    element.append(content);
+    viewport.append(element);
+    return { element, content };
+  };
+  const rows: MessagesTimelineRow[] = [
+    { kind: "working", id: "above", createdAt: null },
+    {
+      kind: "work",
+      id: "entry",
+      groupId: "group",
+      groupedEntries: [],
+      isExpandedToolGroup: true,
+      createdAt: "2026-11-10T00:00:00Z",
+    },
+    { kind: "working", id: "below", createdAt: null },
+  ];
+  const dom = new Map([
+    ["above", makeRow(block(1000))],
+    ["entry", makeRow(block(20))],
+    ["below", makeRow(block(1000))],
+  ]);
+  const entry = dom.get("entry")!;
+  const body = block(600);
+  const sizes = new Map([...dom].map(([id, row]) => [id, row.content.offsetHeight]));
+  const motion = createTimelineLayout({
+    animate: () => true,
+    onPins: () => {},
+    onExited: () => {},
+  });
+  cleanup.defer(
+    motion.attach(
+      { scrollNode: viewport, layoutChanged: () => {} },
+      {
+        getState: () => ({
+          startBuffered: 0,
+          endBuffered: rows.length - 1,
+          indexByKey: (id) => {
+            const index = rows.findIndex((row) => row.id === id);
+            return index < 0 ? undefined : index;
+          },
+          sizeAtIndex: (index) => sizes.get(rows[index]!.id) ?? 0,
+        }),
+        setItemSize: (id, size) => {
+          sizes.set(id, size.height);
+        },
+      },
+    ),
+  );
+  for (const [id, row] of dom) cleanup.defer(motion.register(id, row.element, row.content));
+  await act(() => motion.setRows(rows, rows, new Set(), false));
+  // Opens with the body's first 400px skipped, as if scrolled past by the time it has opened.
+  const open = async (scrollTop: number, above = 400, below = 0) => {
+    viewport.scrollTop = scrollTop;
+    await act(() => {
+      motion.capture("entry");
+      entry.content.append(body);
+      motion.layoutChanged();
+    });
+    motion.trimOpening("entry", above, below, body);
+  };
+  const close = async () => {
+    await act(() => {
+      motion.capture("entry");
+      body.remove();
+      motion.layoutChanged();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(500));
+  };
+
+  await open(1000);
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(viewport.scrollTop).toBe(1400);
+  await close();
+
+  // The body's top is in the lower half, so scrolling would move what is above it.
+  await open(770);
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(viewport.scrollTop).toBe(770);
+  await close();
+
+  // The body's last 400px end out of view, so they appear at cleanup without a scroll.
+  await open(1000, 0, 400);
+  await act(() => vi.advanceTimersByTimeAsync(60));
+  expect(entry.element.offsetHeight).toBeGreaterThan(20);
+  expect(entry.element.offsetHeight).toBeLessThan(220);
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(entry.element.offsetHeight).toBe(620);
+  expect(body.style.translate).toBe("");
+  expect(viewport.scrollTop).toBe(1000);
+  await close();
+
+  // Closed midway, it ends at its collapsed height with nothing to add back.
+  await open(1000);
+  await act(() => vi.advanceTimersByTimeAsync(60));
+  let settledHeight: number | undefined;
+  await act(() => {
+    motion.capture("entry");
+    body.dataset.motionClosingBody = "";
+    motion.afterSettled(() => {
+      settledHeight = entry.element.offsetHeight;
+      body.remove();
+    });
+    motion.layoutChanged();
+  });
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(settledHeight).toBe(20);
+  expect(viewport.scrollTop).toBe(1000);
+});

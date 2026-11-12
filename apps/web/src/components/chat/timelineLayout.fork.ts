@@ -56,6 +56,12 @@ export function createTimelineLayout({
   const slides = new Map<HTMLElement, Slide & { offset: number }>();
   const settled = new Set<() => void>();
   const settleListeners = new Set<() => void>();
+  // Parts of a row the animation skips. Content shifts up by the part above; cleanup adds an
+  // opening's part above back, scrolling past it when most of the view is below it.
+  const trims = new Map<
+    string,
+    { element: HTMLElement; cut: number; above: number; opening: boolean }
+  >();
   const controlled = new Set<string>();
   const indicators = new Map<SVGSVGElement, Indicator>();
   let display: readonly MessagesTimelineRow[] = [];
@@ -87,6 +93,23 @@ export function createTimelineLayout({
   const publishAnimating = () => {
     if (region !== null || !settling || !animate()) return publishSettling(region !== null);
     beat ??= setTimeout(() => publishSettling(false), SETTLE_BEAT_MS);
+  };
+  const durationOf = (job: Pick<Region, "from" | "to" | "survivors">) =>
+    250 +
+    Math.min(
+      100,
+      Math.max(
+        Math.abs(job.to - job.from),
+        ...[...job.survivors.values()].map((survivor) => Math.abs(survivor.to - survivor.from)),
+      ) / 5,
+    );
+  const shift = (element: HTMLElement, above: number) => {
+    element.style.translate = above > 0 ? `0 ${-above}px` : "";
+    element.style.clipPath = above > 0 ? `inset(${above}px 0 0 0)` : "";
+  };
+  const clearTrims = () => {
+    for (const { element } of trims.values()) shift(element, 0);
+    trims.clear();
   };
 
   const capture = (id?: string) => {
@@ -182,6 +205,14 @@ export function createTimelineLayout({
       const row = mounted.get(id);
       return row ? [{ id, row }] : [];
     });
+    let skippedOpening = 0;
+    for (const { element, above, opening } of trims.values()) {
+      if (!opening || !viewport || !element.isConnected) continue;
+      // The skipped part returns at the body's layout top; the scroll keeps the larger side still.
+      const { top, bottom } = viewport.scrollNode.getBoundingClientRect();
+      if (element.getBoundingClientRect().top + above < (top + bottom) / 2) skippedOpening += above;
+    }
+    clearTrims();
     for (const { row } of rows) {
       row.element.style.height = "";
       row.element.style.overflow = "";
@@ -200,6 +231,13 @@ export function createTimelineLayout({
         list?.setItemSize(id, { height, width });
     }
     for (const id of departing) heights.delete(id);
+    if (skippedOpening > 0 && viewport) {
+      const node = viewport.scrollNode;
+      const target = node.scrollTop + skippedOpening;
+      node.scrollTop = target;
+      // The list grows its content box after it commits the new size, so the end can clamp.
+      if (node.scrollTop < target - 0.5) queueMicrotask(() => (node.scrollTop = target));
+    }
     spaces.clear();
     entering = new Set();
     preparing = null;
@@ -276,6 +314,14 @@ export function createTimelineLayout({
               )
             : height,
       );
+    }
+    for (const [id, trim] of trims) {
+      natural.set(id, Math.max(0, (natural.get(id) ?? 0) - trim.cut));
+      if (!trim.opening) continue;
+      const end = (target.get(id) ?? 0) - trim.cut;
+      // A row closed while it opened keeps its content's shift, but no longer skips anything.
+      if (end < (heights.get(id) ?? 0) - 1) trim.opening = false;
+      else target.set(id, Math.max(0, end));
     }
     if (!initialized || !animate()) {
       for (const [id, height] of target) heights.set(id, height);
@@ -404,10 +450,6 @@ export function createTimelineLayout({
         return [id, end < start ? end : Math.min(start, region?.collapsed.get(id) ?? start)];
       }),
     );
-    const distance = Math.max(
-      Math.abs(to - from),
-      ...[...survivors.values()].map((survivor) => Math.abs(survivor.to - survivor.from)),
-    );
     region = {
       keys,
       natural,
@@ -426,7 +468,7 @@ export function createTimelineLayout({
       from,
       to,
       indicators: movingIndicators,
-      duration: 250 + Math.min(100, distance / 5),
+      duration: durationOf({ from, to, survivors }),
       startedAt: null,
     };
     onPins(new Set(keys.filter((id) => mounted.has(id))));
@@ -452,6 +494,47 @@ export function createTimelineLayout({
       return () => {
         settleListeners.delete(listener);
       };
+    },
+    /**
+     * Starts a closing row from its visible part: `above` (scrolled past) and `below` (out of
+     * view) go at once, with a scroll that keeps what remains in place. Call as the animation
+     * starts. `element` is what shifts up by `above`.
+     */
+    trimClosing(id: string, above: number, below: number, element: HTMLElement) {
+      const job = region;
+      const survivor = job?.survivors.get(id);
+      const current = heights.get(id);
+      if (!job || job.startedAt !== null || !survivor || current === undefined) return;
+      const skipAbove = Math.max(0, Math.min(current, above));
+      const cut = Math.min(current, skipAbove + Math.max(0, below));
+      if (cut < 1) return;
+      survivor.from = Math.max(survivor.to, survivor.from - cut);
+      job.natural.set(id, Math.max(0, (job.natural.get(id) ?? current) - cut));
+      job.duration = durationOf(job);
+      if (skipAbove < current) shift(element, skipAbove);
+      trims.set(id, { element, cut, above: skipAbove, opening: false });
+      writeHeight(id, current - cut);
+      if (skipAbove > 0 && viewport) viewport.scrollNode.scrollTop -= skipAbove;
+    },
+    /**
+     * Ends an opening row at its visible part: `above` will be scrolled past once it has opened,
+     * so it opens with `element` shifted up by that much, and cleanup adds it back with a scroll
+     * that keeps the view in place; `below` will end out of view and appears at cleanup. Call as
+     * the animation starts.
+     */
+    trimOpening(id: string, above: number, below: number, element: HTMLElement) {
+      const job = region;
+      if (!job || job.startedAt !== null || !job.keys.includes(id) || job.survivors.has(id)) return;
+      const natural = job.natural.get(id) ?? 0;
+      const growth = natural - (heights.get(id) ?? 0);
+      const skipAbove = Math.max(0, Math.min(growth, above));
+      const cut = Math.min(growth, skipAbove + Math.max(0, below));
+      if (cut < 1) return;
+      job.natural.set(id, natural - cut);
+      job.to -= cut;
+      job.duration = durationOf(job);
+      shift(element, skipAbove);
+      trims.set(id, { element, cut, above: skipAbove, opening: true });
     },
     registerIndicator(element: SVGSVGElement) {
       const angle = element.dataset.expanded === "true" ? 90 : 0;
@@ -486,6 +569,7 @@ export function createTimelineLayout({
         measuredHeights.clear();
         spaces.clear();
         clearSlides();
+        clearTrims();
         controlled.clear();
         for (const indicator of indicators.values()) writeAngle(indicator, indicator.target);
         indicatorDirty = false;
