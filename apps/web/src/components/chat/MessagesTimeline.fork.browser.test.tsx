@@ -1,6 +1,6 @@
 import { EnvironmentId, MessageId, RunId } from "@t3tools/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
-import { createRef, type ComponentProps, type ReactElement } from "react";
+import { createRef, useState, type ComponentProps, type ReactElement } from "react";
 import { Atom } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -10,6 +10,7 @@ import { environmentThreadDetails } from "../../state/threads";
 import { act, fakeTimers, render, type Screen } from "../../../test/render";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { CHAT_TIMELINE_ANCHOR_OFFSET } from "./timelineScrollAnchoring";
+import { useTimelineFollow } from "./useTimelineFollow";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -182,6 +183,106 @@ async function foldSettled(screen: Screen) {
   );
 }
 
+const PROCESS_RUN_ID = RunId.make("process-run");
+
+/** Context rows, then a running turn of `commands` commands, `a` onwards, printing `lines` lines each. */
+function processThread(lines: number, commands = 3): Entry[] {
+  const command = (id: string) =>
+    work(id, {
+      runId: PROCESS_RUN_ID,
+      itemType: "command_execution",
+      tone: "tool",
+      label: "Command",
+      command: `echo ${id}`,
+      detail: Array.from({ length: lines }, (_, index) => `${id} output ${index}`).join("\n"),
+      toolLifecycleStatus: "completed",
+    });
+  return [
+    ...Array.from({ length: 12 }, (_, index) =>
+      message(`Context ${index}\n\n${"Conversation details. ".repeat(12)}`, {}, `context-${index}`),
+    ),
+    message("Run the commands", { runId: PROCESS_RUN_ID }, "process-prompt"),
+    ...Array.from({ length: commands }, (_, index) => command(String.fromCharCode(97 + index))),
+  ];
+}
+
+function processTimelineProps(props: Partial<TimelineProps> = {}) {
+  return {
+    ...baseProps(),
+    isWorking: true,
+    latestRun: {
+      runId: PROCESS_RUN_ID,
+      status: "running",
+      startedAt: CREATED_AT,
+      completedAt: null,
+    },
+    ...props,
+  } satisfies Omit<TimelineProps, "timelineEntries">;
+}
+
+function processContainer() {
+  const container = document.createElement("div");
+  container.style.cssText = "height: 600px; width: 800px; display: flex; flex-direction: column;";
+  return container;
+}
+
+async function motionSettled(screen: Screen) {
+  await vi.waitFor(() => {
+    expect(screen.container.querySelector("[data-timeline-motion-row][style*=height]")).toBe(null);
+    expect(screen.container.querySelector("[data-timeline-motion-row][inert]")).toBe(null);
+  });
+}
+
+/** Opens the running group's history and scrolls to its end. */
+async function openProcessHistory(screen: Screen, viewport: HTMLElement) {
+  await click(
+    screen.container.querySelector<HTMLElement>(
+      '[data-timeline-row-kind="work-live"] button[aria-expanded]',
+    )!,
+  );
+  await motionSettled(screen);
+  viewport.scrollTop = viewport.scrollHeight;
+  await vi.waitFor(() =>
+    expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2),
+  );
+}
+
+function processEntry(screen: Screen, id: string) {
+  return screen.container.querySelector<HTMLElement>(
+    `[data-timeline-row-id$=":entry:${id}"] [data-work-entry-id]`,
+  )!;
+}
+
+/** Follows the end as ChatView does. */
+function FollowedTimeline(props: TimelineProps) {
+  const [anchor, setAnchor] = useState<{
+    readonly threadKey: string | null;
+    readonly messageId: MessageId | null;
+  }>({ threadKey: null, messageId: null });
+  const follow = useTimelineFollow({
+    legendListRef: props.listRef,
+    composerTimelineInset: props.contentInsetEndAdjustment,
+    routeThreadKey: props.routeThreadKey,
+    activeThreadKey: props.routeThreadKey,
+    isServerThread: false,
+    serverProjection: null,
+    threadStatus: "live",
+    activeActivityRun: null,
+    activeRunningTurnId: null,
+    timelineEntries: props.timelineEntries,
+    timelineAnchorMessageId: anchor.messageId,
+    setTimelineAnchor: setAnchor,
+  });
+  return (
+    <MessagesTimeline
+      {...props}
+      liveFollowEnabled={follow.timelineLiveFollowEnabled}
+      onIsAtEndChange={follow.onIsAtEndChangeStable}
+      onViewportAttach={follow.attachTimelineViewport}
+    />
+  );
+}
+
 describe("MessagesTimeline work rows", () => {
   it.each([
     {
@@ -304,6 +405,208 @@ describe("MessagesTimeline work rows", () => {
     expect(sliding.top).toBeLessThan(expandedTop);
     expect(sliding.bottom).toBeLessThanOrEqual(rowBottom + 1);
     expect(rowMask).toBe("");
+  });
+
+  it.each([
+    { size: "short", lines: 12, endInView: true },
+    { size: "tall", lines: 80, endInView: false },
+  ])(
+    "reveals a $size history entry that opens under the composer, up to its line",
+    async ({ lines, endInView }) => {
+      setup();
+      const composerInset = 150;
+      const props = processTimelineProps({ contentInsetEndAdjustment: composerInset });
+      await using screen = await render(
+        <MessagesTimeline {...props} timelineEntries={processThread(lines)} />,
+        { container: processContainer() },
+      );
+      const viewport = props.listRef.current!.getScrollableNode()!;
+      await openProcessHistory(screen, viewport);
+      const entry = processEntry(screen, "c");
+      const line = entry.firstElementChild as HTMLElement;
+      const row = entry.closest<HTMLElement>("[data-timeline-motion-row]")!;
+      const top = viewport.getBoundingClientRect().top;
+      const visibleBottom = top + viewport.clientHeight - composerInset;
+      expect(entry.getBoundingClientRect().bottom).toBeLessThan(visibleBottom);
+      const closed = row.offsetHeight;
+      {
+        using _timers = fakeTimers();
+        await click(entry);
+        await act(() => vi.advanceTimersByTimeAsync(200));
+        // Only the part that ends in view animates.
+        expect(row.offsetHeight - closed).toBeLessThan(viewport.clientHeight - composerInset);
+        await act(() => vi.advanceTimersByTimeAsync(1000));
+      }
+      await motionSettled(screen);
+      await vi.waitFor(() => {
+        expect(line.getAttribute("aria-expanded")).toBe("true");
+        expect(entry.getBoundingClientRect().height).toBeGreaterThan(200);
+        const lineRoom = line.getBoundingClientRect().top - (top + CHAT_TIMELINE_ANCHOR_OFFSET);
+        const hiddenEnd = entry.getBoundingClientRect().bottom - visibleBottom;
+        expect(lineRoom).toBeGreaterThanOrEqual(-1);
+        expect(hiddenEnd <= 1).toBe(endInView);
+        expect(Math.min(lineRoom, hiddenEnd)).toBeLessThanOrEqual(1);
+      });
+    },
+  );
+
+  it.each([
+    { size: "short", commands: 3, endInView: true },
+    { size: "tall", commands: 24, endInView: false },
+  ])(
+    "reveals a $size work group that opens under the composer, up to its header",
+    async ({ commands, endInView }) => {
+      setup();
+      const composerInset = 150;
+      const props = processTimelineProps({ contentInsetEndAdjustment: composerInset });
+      await using screen = await render(
+        <MessagesTimeline {...props} timelineEntries={processThread(4, commands)} />,
+        { container: processContainer() },
+      );
+      const viewport = props.listRef.current!.getScrollableNode()!;
+      const toggle = () =>
+        screen.container.querySelector<HTMLElement>(
+          '[data-timeline-row-kind="work-live"] button[aria-expanded]',
+        )!;
+      const header = () => toggle().closest<HTMLElement>("[data-timeline-motion-row]")!;
+      const top = viewport.getBoundingClientRect().top;
+      const visibleBottom = top + viewport.clientHeight - composerInset;
+      await vi.waitFor(async () => {
+        await act(() => {
+          viewport.scrollTop += header().getBoundingClientRect().bottom - (visibleBottom - 8);
+          viewport.dispatchEvent(new Event("scroll"));
+        });
+        expect(header().getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleBottom);
+        expect(header().getBoundingClientRect().bottom).toBeGreaterThan(visibleBottom - 16);
+      });
+      const scrollTop = viewport.scrollTop;
+      await click(toggle());
+      await motionSettled(screen);
+      const lastId = String.fromCharCode(96 + commands);
+      await vi.waitFor(() => {
+        const last = screen.container.querySelector(`[data-timeline-row-id$=":entry:${lastId}"]`);
+        const headerRoom =
+          header().getBoundingClientRect().top - (top + CHAT_TIMELINE_ANCHOR_OFFSET);
+        const hiddenEnd = (last?.getBoundingClientRect().bottom ?? Infinity) - visibleBottom;
+        expect(viewport.scrollTop).toBeGreaterThan(scrollTop);
+        expect(headerRoom).toBeGreaterThanOrEqual(-1);
+        expect(hiddenEnd <= 1).toBe(endInView);
+        expect(Math.min(headerRoom, hiddenEnd)).toBeLessThanOrEqual(1);
+      });
+    },
+  );
+
+  it("keeps following while the live preview's entry opens and grows", async () => {
+    setup();
+    const props = processTimelineProps();
+    const entries = processThread(60);
+    await using screen = await render(<FollowedTimeline {...props} timelineEntries={entries} />, {
+      container: processContainer(),
+    });
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    const distanceFromEnd = () =>
+      viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+    const preview = screen.container.querySelector<HTMLElement>(
+      '[data-timeline-row-kind="work-live"] [data-activity-preview] [aria-expanded]',
+    )!;
+    const row = preview.closest<HTMLElement>("[data-timeline-motion-row]")!;
+    const closed = row.offsetHeight;
+    {
+      using _timers = fakeTimers();
+      await click(preview);
+      await act(() => vi.advanceTimersByTimeAsync(300));
+      // As for a history entry, only the part that ends in view animates.
+      expect(row.style.height).not.toBe("");
+      expect(row.offsetHeight - closed).toBeLessThan(viewport.clientHeight);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+    }
+    await motionSettled(screen);
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+    expect(row.offsetHeight - closed).toBeGreaterThan(viewport.clientHeight);
+    const grown = entries.map((entry) =>
+      entry.id === "c" && entry.kind === "work"
+        ? {
+            ...entry,
+            entry: {
+              ...entry.entry,
+              detail: Array.from({ length: 90 }, (_, index) => `c output ${index}`).join("\n"),
+            },
+          }
+        : entry,
+    );
+    const height = viewport.scrollHeight;
+    await screen.rerender(<FollowedTimeline {...props} timelineEntries={grown} />);
+    await motionSettled(screen);
+    await vi.waitFor(() => {
+      expect(viewport.scrollHeight).toBeGreaterThan(height + 200);
+      expect(distanceFromEnd()).toBeLessThan(2);
+    });
+  });
+
+  it("collapses an entry from its stuck line in place", async () => {
+    setup();
+    const props = processTimelineProps();
+    await using screen = await render(
+      <MessagesTimeline {...props} timelineEntries={processThread(80)} />,
+      { container: processContainer() },
+    );
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    await openProcessHistory(screen, viewport);
+    // An open entry below leaves enough timeline under the collapsed one to hold its line.
+    const entry = processEntry(screen, "a");
+    await click(processEntry(screen, "c"));
+    await click(entry);
+    await motionSettled(screen);
+    const line = entry.firstElementChild as HTMLElement;
+    const next = () =>
+      screen.container.querySelector<HTMLElement>('[data-timeline-row-id$=":entry:b"]')!;
+    viewport.scrollTop +=
+      entry.getBoundingClientRect().top - viewport.getBoundingClientRect().top + 400;
+    await vi.waitFor(() => expect(line.dataset.stuck).toBe(""));
+    const top = line.getBoundingClientRect().top;
+    expect(top).toBeCloseTo(viewport.getBoundingClientRect().top, 0);
+    await click(line);
+    await motionSettled(screen);
+    await vi.waitFor(() => {
+      expect(line.getAttribute("aria-expanded")).toBe("false");
+      expect(line.getBoundingClientRect().top).toBeCloseTo(top, 0);
+      expect(next().getBoundingClientRect().top - line.getBoundingClientRect().bottom).toBeLessThan(
+        20,
+      );
+      expect(line.dataset.stuck).toBeUndefined();
+    });
+  });
+
+  it("collapses a stuck entry from what is visible of it", async () => {
+    setup();
+    const props = processTimelineProps();
+    await using screen = await render(
+      <MessagesTimeline {...props} timelineEntries={processThread(80)} />,
+      { container: processContainer() },
+    );
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    await openProcessHistory(screen, viewport);
+    const entry = processEntry(screen, "a");
+    await click(processEntry(screen, "c"));
+    await click(entry);
+    await motionSettled(screen);
+    const line = entry.firstElementChild as HTMLElement;
+    const row = entry.closest<HTMLElement>("[data-timeline-motion-row]")!;
+    const top = viewport.getBoundingClientRect().top;
+    viewport.scrollTop += entry.getBoundingClientRect().top - top + 400;
+    await vi.waitFor(() => expect(line.dataset.stuck).toBe(""));
+    const lineTop = line.getBoundingClientRect().top;
+    const hidden = lineTop - row.getBoundingClientRect().top;
+    const scrollTop = viewport.scrollTop;
+    using _timers = fakeTimers();
+    await click(line);
+    expect(viewport.scrollTop).toBeCloseTo(scrollTop - hidden, 0);
+    expect(row.getBoundingClientRect().top).toBeCloseTo(lineTop, 0);
+    expect(row.getBoundingClientRect().bottom).toBeCloseTo(top + viewport.clientHeight, 0);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(line.getAttribute("aria-expanded")).toBe("false");
+    expect(line.getBoundingClientRect().top).toBeCloseTo(lineTop, 0);
   });
 });
 

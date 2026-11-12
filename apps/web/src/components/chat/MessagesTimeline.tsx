@@ -586,7 +586,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     anchorKey: string,
     reveal?: { readonly entryId?: string | undefined; readonly contentKey?: string | undefined },
   ) => {
-    if (captureForkDisclosure(anchorKey)) return;
+    if (captureForkDisclosure(anchorKey, reveal !== undefined)) return;
     const list = listRef.current;
     disclosureRevealRef.current = null;
     // An anchor ends end-follow until the reader scrolls, so a streaming turn keeps the live end.
@@ -818,6 +818,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isCompacting,
     awaitingUser,
     pendingApprovals,
+    liveFollowEnabled,
+    contentInsetEndAdjustment,
     listRef,
     navigateTimeline,
   });
@@ -1526,7 +1528,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               data-workspace-focus-default
               className={cn(
                 "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-                topFadeEnabled && "topbar-scroll-fade",
+                topFadeEnabled && "topbar-scroll-fade data-[entry-stuck]:mask-none",
               )}
               ListHeaderComponent={listHeader}
               ListFooterComponent={timelineListFooter}
