@@ -289,9 +289,9 @@ it("app-stream-assistant-turn", async () => {
       .element(page.getByText(`word${STREAM_DELTAS - 1}`, { exact: false }))
       .toBeVisible();
   });
-  // Only the streaming row changes. The timeline renders for the new item and its layout, not
-  // per delta, and history rows not at all.
-  expect(counted.components.ConversationTimeline).toBeLessThanOrEqual(3);
+  // Only the streaming row changes. The timeline renders for the new item and its layout, and
+  // as motion pins the entering row and releases it, not per delta, and history rows not at all.
+  expect(counted.components.ConversationTimeline).toBeLessThanOrEqual(5);
   expect(counted.components.UserTimelineRow).toBeUndefined();
   // Paced reveal renders the row on its own clock, at most once per delta.
   expect(counted.components.AssistantTimelineRow).toBeLessThanOrEqual(STREAM_DELTAS);

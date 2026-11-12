@@ -3,12 +3,13 @@ import { createContext } from "react";
 import { type WorkGroupViewState, type WorkGroupViewedImage } from "./timelineRowContext";
 
 export interface ForkTimelineRowState {
-  /** Activity shows at once instead of pacing: find, citation positioning, or zen. */
+  /** Activity shows at once instead of pacing: find, citation positioning, zen, or a thread still opening. */
   activityImmediate: boolean;
   seenAssistantMessages: Set<string>;
   onPresentationPendingChange: (messageId: string, pending: boolean, textLength: number) => void;
   presentedAssistantMessages: ReadonlyMap<string, number>;
   pendingAssistantMessages: ReadonlySet<string>;
+  onWorkEntryToggle: (anchorKey: string) => void;
   workGroupViewState: ForkWorkGroupViewState;
 }
 
@@ -22,5 +23,5 @@ export interface ForkWorkGroupViewState extends WorkGroupViewState {
 export const ForkWorkGroupViewCtx = createContext<{
   state: ForkWorkGroupViewState;
   viewedImages: ReadonlyArray<WorkGroupViewedImage>;
-  onToggleEntry: (collapsed: boolean) => void;
+  onToggleEntry: () => void;
 } | null>(null);

@@ -28,9 +28,11 @@ import {
   forkTimelineItemType,
   useForkTimeline,
   useForkTimelinePresentation,
+  useForkTimelineSettle,
 } from "./MessagesTimeline.fork";
 import { processAnswerPreview } from "./MessagesTimeline.logic.fork";
 import { isForkTimelineRow, renderForkTimelineRow } from "./MessagesTimeline.rows.fork";
+import { TimelineDisclosureIndicator } from "./timelineMotion.fork";
 import { type ForkWorkGroupViewState } from "./timelineRowContext.fork";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
@@ -67,8 +69,6 @@ import {
   CircleAlertIcon,
   MessagesSquareIcon,
   Minimize2Icon,
-  ChevronDownIcon,
-  ChevronRightIcon,
 } from "lucide-react";
 import { Skeleton } from "../ui/skeleton";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -317,7 +317,7 @@ interface MessagesTimelineProps {
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
   /**
    * False while the entries are a copy held from before the thread's detail synced. The
-   * visit's history starts from the first synced entries.
+   * visit's history and the motion settle start from the first synced layout.
    */
   synced?: boolean;
   contentInsetEndAdjustment: number;
@@ -434,7 +434,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const viewportRef = useRef<TimelineViewport | null>(null);
-  const navigateTimeline = () => viewportRef.current?.navigate({ releasesFollow: true });
+  const navigateTimeline = () => {
+    listRef.current?.cancelScroll();
+    viewportRef.current?.navigate({ releasesFollow: true });
+  };
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -457,6 +460,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     findExpanded,
     citationPositioning,
   });
+  const { captureDisclosure: captureForkDisclosure } = forkPresentation;
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
   // Find open at the opening is part of the snapshot: opening find later
   // announces its own navigation (threadFindStore's announceOpening).
@@ -574,6 +578,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     anchorKey: string,
     reveal?: { readonly entryId?: string | undefined; readonly contentKey?: string | undefined },
   ) => {
+    if (captureForkDisclosure(anchorKey)) return;
     const list = listRef.current;
     disclosureRevealRef.current = null;
     // An anchor ends end-follow until the reader scrolls, so a streaming turn keeps the live end.
@@ -796,11 +801,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
     expandedWorkGroupIds: paintedExpandedWorkGroupIds,
     setExpandedWorkGroupIds,
     workGroupViewState,
+    restoringThreadPosition,
+    prefersReducedMotion,
     activeTurnStartedAt,
     isPreparingWorktree,
     isCompacting,
     awaitingUser,
     pendingApprovals,
+    navigateTimeline,
   });
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
@@ -838,6 +846,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const nextOpening = nextListOpening(listOpening, !showsEmptyState, listIdentityKey);
   if (nextOpening !== listOpening) setListOpening(nextOpening);
   const listOpenedOn = nextOpening.mounted ? nextOpening.identity : null;
+  useForkTimelineSettle(forkPresentation, showsEmptyState);
   const restoreReady = restoringThreadPosition && rows.length > 0;
   // Z: syncs LegendList's scroll position with which thread it shows. The list
   // is not keyed per thread and reports no "new data" event, and the restore
@@ -901,6 +910,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const firstMessageRow = rows.find(isMessageRow);
   const lastMessageRow = rows.findLast(isMessageRow);
   const alwaysRenderKeys = [
+    ...fork.alwaysRenderKeys,
     ...(firstMessageRow ? [firstMessageRow.id] : []),
     ...(lastMessageRow && lastMessageRow !== firstMessageRow ? [lastMessageRow.id] : []),
     ...(readyCitationRequest && citedRowId !== null && citationPositioning ? [citedRowId] : []),
@@ -999,9 +1009,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
       current === nextCurrentIndex ? current : nextCurrentIndex,
     );
     // The exact bottom, not the follow re-arm zone: Next can still scroll inside that zone.
+    // Following counts as the end, or each smooth follow scroll re-renders the timeline twice.
     setMinimapAtEnd(
-      viewport !== undefined &&
-        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1,
+      liveFollowEnabled ||
+        (viewport !== undefined &&
+          viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1),
     );
   });
 
@@ -1089,12 +1101,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   // Rows added, removed or rewrapped (chat width) change the content size,
   // which moves the scroll position, the overflow, and the content lane width.
-  const handleContentSizeChanged = useStableCallback((laidOutData: unknown) => {
-    // The first laid-out content of a newly shown thread ends its settling; a
-    // frame the previous thread scheduled laid out the previous thread's rows.
-    if (laidOutData === rows) {
-      setSettlingListIdentity((current) => (current === listIdentityKey ? null : current));
-    }
+  const handleContentSizeChanged = useStableCallback(() => {
     handleScroll();
   });
   // The content lane only changes width with the viewport or the chat width
@@ -1281,37 +1288,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
         })
       : null;
     viewportRef.current = viewport;
+    const detachFork = fork.attach(viewport, list);
     const detachViewport = viewport ? onViewportAttach?.(viewport) : undefined;
     const stopRememberingRelease = viewport?.onFollowReleased(rememberReleasedPosition);
     const stopDisclosureReveal = viewport?.subscribe(() => {
       disclosureRevealRef.current = null;
     });
-    let contentSizeFrame: number | null = null;
-    // LegendList lays rows out from layout effects; the next frame sees them settled.
-    let scheduledData: unknown = null;
-    const scheduleContentSizeChanged = () => {
-      if (!list) return;
-      const laidOutData = list.getState().data;
-      if (contentSizeFrame !== null) {
-        if (scheduledData === laidOutData) return;
-        cancelAnimationFrame(contentSizeFrame);
-      }
-      scheduledData = laidOutData;
-      contentSizeFrame = requestAnimationFrame(() => {
-        contentSizeFrame = null;
-        handleContentSizeChanged(laidOutData);
-        revealExpandedDisclosure();
-      });
-    };
-    const stopListeningToContentSize = list
-      ?.getState()
-      .listen("totalSize", () => scheduleContentSizeChanged());
-    scheduleContentSizeChanged();
+    const detachForkAfterFollow = fork.attachAfterFollow(viewport, list, handleContentSizeChanged);
     return () => {
-      stopListeningToContentSize?.();
+      detachForkAfterFollow();
+      detachFork();
       stopRememberingRelease?.();
       stopDisclosureReveal?.();
-      if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);
       if (disclosureRevealFrameRef.current !== null) {
         cancelAnimationFrame(disclosureRevealFrameRef.current);
         disclosureRevealFrameRef.current = null;
@@ -1393,7 +1381,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           data-timeline-root="true"
         >
           <AudioPreviewUnmountContext value={onAudioUnmount}>
-            <TimelineRowContent row={item} />
+            <TimelineRowContent row={item} exiting={fork.exits.has(item.id)} />
           </AudioPreviewUnmountContext>
         </div>
       </div>
@@ -1403,7 +1391,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     identity: listIdentityKey,
     rowCount: rows.length,
     sharedState,
-    forkRowState: fork.rowState,
+    forkFrameState: fork.frameState,
   };
   const timelineListFooter = (
     <TimelineListFooter
@@ -1495,9 +1483,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 !liveFollowEnabled ||
                 fullscreenAppRowId !== null
                   ? false
-                  : (isWorking || forkPresentation.visit.pending.size > 0) &&
-                      !prefersReducedMotion &&
-                      settlingListIdentity === null
+                  : isWorking && !prefersReducedMotion && settlingListIdentity === null
                     ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
                     : TIMELINE_MAINTAIN_SCROLL_AT_END
               }
@@ -1521,6 +1507,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               )}
               ListHeaderComponent={listHeader}
               ListFooterComponent={timelineListFooter}
+              {...fork.listProps({ onItemSizeChanged: scheduleMinimapRefresh })}
             />
             <TimelineMinimap
               items={minimapItems}
@@ -1644,8 +1631,14 @@ function getItemType(item: MessagesTimelineRow) {
     : `message:${item.message.id}`;
 }
 
-const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
-  if (isForkTimelineRow(row)) return renderForkTimelineRow(row);
+const TimelineRowContent = memo(function TimelineRowContent({
+  row,
+  exiting = false,
+}: {
+  row: TimelineRow;
+  exiting?: boolean;
+}) {
+  if (isForkTimelineRow(row)) return renderForkTimelineRow(row, exiting);
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
@@ -1683,12 +1676,14 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           ? "group/assistant"
           : null,
       )}
-      data-timeline-row-id={row.id}
-      data-timeline-row-kind={row.kind}
+      data-timeline-row-id={exiting ? undefined : row.id}
+      data-timeline-row-kind={exiting ? undefined : row.kind}
       data-message-id={
-        row.kind === "message" || row.kind === "assistant-meta" ? row.message.id : undefined
+        !exiting && (row.kind === "message" || row.kind === "assistant-meta")
+          ? row.message.id
+          : undefined
       }
-      data-message-role={row.kind === "message" ? row.message.role : undefined}
+      data-message-role={!exiting && row.kind === "message" ? row.message.role : undefined}
     >
       {isWorkLogRow ? (
         <WorkLogBlock
@@ -1884,11 +1879,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
             {row.label}
             {error ? ` · ${error}` : ""}
           </span>
-          {row.expanded ? (
-            <ChevronDownIcon className="size-3.5" />
-          ) : (
-            <ChevronRightIcon className="size-3.5" />
-          )}
+          <TimelineDisclosureIndicator className="size-3.5" expanded={row.expanded} />
         </button>
         <TimelineRowTimestamp
           createdAt={row.createdAt}
@@ -1918,11 +1909,10 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
         aria-busy={loading}
         className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
-        {row.expanded ? (
-          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
+        <TimelineDisclosureIndicator
+          className="size-3.5 shrink-0 text-muted-foreground"
+          expanded={row.expanded}
+        />
         <span className="text-xs font-medium text-foreground/80">
           {row.label}
           {error ? ` · ${error}` : ""}

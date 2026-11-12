@@ -1,4 +1,5 @@
 import { WorkLogBlock } from "./WorkLog";
+import { TimelineDisclosure } from "./timelineMotion.fork";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentThreadDetails } from "../../state/threads";
@@ -66,13 +67,14 @@ export const V2SubagentGroup = memo(function V2SubagentGroup({
     }
   }
   const toggle = () => {
-    ctx.onToggleWorkEntry(row.id, expanded);
+    forkCtx.onWorkEntryToggle(row.id);
     if (expanded) ctx.workGroupViewState.expandedEntries.delete(groupId);
     else ctx.workGroupViewState.expandedEntries.add(groupId);
     setExpanded(!expanded);
   };
-  const shown = expanded ? members : current && latest ? [latest.item] : [];
-  const content = shown.map((item) => (
+  // The current group keeps its latest member in place; the others open and close around it.
+  const pivot = current && latest ? members.findIndex((item) => item.id === latest.item.id) : -1;
+  const member = (item: (typeof members)[number]) => (
     <V2LifecycleRow
       environmentId={ctx.activeThreadEnvironmentId}
       key={item.id}
@@ -80,10 +82,10 @@ export const V2SubagentGroup = memo(function V2SubagentGroup({
       runs={ctx.runs}
       onOpenThread={ctx.onOpenThread}
     />
-  ));
+  );
   return (
     <div data-subagent-group>
-      <WorkLogBlock layout="group-header" continues={shown.length > 0}>
+      <WorkLogBlock layout="group-header" continues={row.continuesWorkLog}>
         <WorkGroupHeader
           label={header.label}
           active={current}
@@ -99,12 +101,22 @@ export const V2SubagentGroup = memo(function V2SubagentGroup({
           timestampFormat={ctx.timestampFormat}
           onToggle={toggle}
         />
+        <TimelineDisclosure open={expanded || pivot >= 0}>
+          <div className="ml-2 border-l border-border/60 pl-2 pb-1">
+            <TimelineDisclosure open={expanded} slide={pivot >= 0}>
+              {(pivot >= 0 ? members.slice(0, pivot) : members).map(member)}
+            </TimelineDisclosure>
+            {pivot >= 0 ? (
+              <>
+                {member(members[pivot]!)}
+                <TimelineDisclosure open={expanded}>
+                  {members.slice(pivot + 1).map(member)}
+                </TimelineDisclosure>
+              </>
+            ) : null}
+          </div>
+        </TimelineDisclosure>
       </WorkLogBlock>
-      {shown.length > 0 ? (
-        <WorkLogBlock continues={row.continuesWorkLog} layout="group-content">
-          <div className="ml-2 border-l border-border/60 pl-2 pb-2">{content}</div>
-        </WorkLogBlock>
-      ) : null}
     </div>
   );
 });
