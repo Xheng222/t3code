@@ -37,7 +37,10 @@ export function ThreadTimeline({
   detailLoading: boolean;
 }) {
   useWatchedThread(threadDetailRef);
-  const visibleTurnItems = useTimelineVisibleTurnItems(threadDetailRef);
+  // Todo lists show in the Tasks panel instead.
+  const visibleTurnItems = useTimelineVisibleTurnItems(threadDetailRef).filter(
+    ({ item }) => item.type !== "todo_list",
+  );
   const serverEntries = useIncrementalTimelineEntries(activeThreadKey, {
     ...entriesInput,
     visibleTurnItems,

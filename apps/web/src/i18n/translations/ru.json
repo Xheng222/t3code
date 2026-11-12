@@ -1,4 +1,7 @@
 {
+  "fae3639874428042": "Задачи",
+  "fb976abe5b22bbe6": "Задачи",
+  "6ee23496bef7845d": "{status, select, completed {Completed: {text}} running {In progress: {text}} other {Pending: {text}}}",
   "4052bd9a2478988d": "Could not reach this port on the environment",
   "23be753133ae6950": "Тред",
   "0001ae5846061bb6": "Тред на {machine}",

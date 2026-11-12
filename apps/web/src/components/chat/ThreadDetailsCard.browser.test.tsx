@@ -45,6 +45,7 @@ function Card({
   rows = 1,
   automationRows = 0,
   serverOverflowRows = 0,
+  afterRows = 0,
 }: {
   threadRef: ScopedThreadRef;
   inline: boolean;
@@ -55,6 +56,7 @@ function Card({
   automationRows?: number;
   /** Rows of 100px that expanded server lists add, which density ignores. */
   serverOverflowRows?: number;
+  afterRows?: number;
 }) {
   return (
     // The web root renders in StrictMode, which re-runs ref callbacks on every mount.
@@ -77,6 +79,7 @@ function Card({
           anchor={fixture.anchor}
           handle={fixture.handle}
           contentKey={String(rows)}
+          after={afterRows > 0 ? <div style={{ height: afterRows * 100 }}>Tasks</div> : undefined}
         >
           {(density) => (
             <>
@@ -172,6 +175,13 @@ it("returns to full density when hidden items make the content fit", async () =>
   const card = page.getByRole("region", { name: "Thread details" });
   await expect.element(card).toHaveAttribute("data-density", "compact");
 
+  await screen.rerender(<Card threadRef={threadB} inline fixture={fixture} rows={2} />);
+  await expect.element(card).toHaveAttribute("data-density", "full");
+
+  await screen.rerender(
+    <Card threadRef={threadB} inline fixture={fixture} rows={2} afterRows={3} />,
+  );
+  await expect.element(card).toHaveAttribute("data-density", "compact");
   await screen.rerender(<Card threadRef={threadB} inline fixture={fixture} rows={2} />);
   await expect.element(card).toHaveAttribute("data-density", "full");
 });
