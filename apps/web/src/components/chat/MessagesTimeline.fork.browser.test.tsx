@@ -1,11 +1,13 @@
 import { EnvironmentId, MessageId, RunId } from "@t3tools/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
-import { createRef, type ComponentProps } from "react";
-import { expect, it, vi } from "vite-plus/test";
+import { createRef, type ComponentProps, type ReactElement } from "react";
+import { Atom } from "effect/reactivity";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
-import { act, fakeTimers, render } from "../../../test/render";
+import { environmentThreadDetails } from "../../state/threads";
+import { act, fakeTimers, render, type Screen } from "../../../test/render";
 import { MessagesTimeline } from "./MessagesTimeline";
 
 const environmentQuery = vi.hoisted(() => ({
@@ -122,6 +124,32 @@ function v2Item(type: string, fields: Record<string, unknown>) {
   } as never;
 }
 
+async function renderElement(element: ReactElement, options: { router?: false } = {}) {
+  const container = document.createElement("div");
+  container.style.cssText = "height: 1200px; width: 900px; display: flex; flex-direction: column;";
+  const screen = await render(element, { container, ...options });
+  const buttons = (name: string | RegExp) =>
+    [...container.querySelectorAll<HTMLElement>("button, [role=button]")].filter((button) => {
+      const label = button.getAttribute("aria-label") ?? button.textContent ?? "";
+      return typeof name === "string" ? label === name : name.test(label);
+    });
+  return Object.assign(screen, {
+    text: () => container.textContent ?? "",
+    buttons,
+    button: (name: string | RegExp) => {
+      const [match] = buttons(name);
+      if (!match) throw new Error(`Missing button: ${String(name)}`);
+      return match;
+    },
+  });
+}
+
+function renderTimeline(entries: ReadonlyArray<Entry>, props: Partial<TimelineProps> = {}) {
+  return renderElement(
+    <MessagesTimeline {...baseProps()} timelineEntries={entries as Entry[]} {...props} />,
+  );
+}
+
 async function click(element: HTMLElement) {
   await act(async () => element.click());
 }
@@ -129,6 +157,183 @@ async function click(element: HTMLElement) {
 function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
   environmentQuery.data = { tasks: scheduledTasks };
 }
+
+type FoldTimeline = (key: string, entries: Entry[], synced?: boolean) => ReactElement;
+
+/** Context rows, then a finished turn whose progress folds under "Worked for". */
+function foldThread(name: string): Entry[] {
+  const runId = RunId.make(`${name}-run`);
+  return [
+    ...Array.from({ length: 12 }, (_, index) =>
+      message(`${name} context ${index}`, {}, `${name}-context-${index}`),
+    ),
+    message(`${name} progress\n\n`.repeat(20), { role: "assistant", runId }, `${name}-progress`),
+    message(`${name} done`, { role: "assistant", runId }, `${name}-final`),
+  ];
+}
+
+async function foldSettled(screen: Screen) {
+  const heading = screen.getByRole("button", { name: /^Worked for/ });
+  // LegendList keeps rows click-through until its initial scroll settles on animation frames.
+  await expect.element(heading).toHaveStyle({ pointerEvents: "auto" });
+  await vi.waitFor(() =>
+    expect(heading.element().checkVisibility({ opacityProperty: true })).toBe(true),
+  );
+}
+
+describe("MessagesTimeline work rows", () => {
+  it.each([
+    {
+      opening: "the list identity changes with identical rows",
+      reopen: async (screen: Screen, ui: FoldTimeline, key: string, entries: Entry[]) => {
+        await screen.rerender(ui(`${key}-copy`, entries));
+      },
+    },
+    {
+      opening: "a stale copy syncs with new rows in the frame it opens",
+      reopen: async (screen: Screen, ui: FoldTimeline, key: string, entries: Entry[]) => {
+        await screen.rerender(ui(`${key}-other`, foldThread("other")));
+        await foldSettled(screen);
+        using _timers = fakeTimers();
+        await screen.rerender(ui(key, entries, false));
+        // Same heights, new message objects: the synced detail of the same thread.
+        await screen.rerender(
+          ui(
+            key,
+            entries.map((entry) =>
+              entry.kind === "message" ? { ...entry, message: { ...entry.message } } : entry,
+            ),
+          ),
+        );
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+      },
+    },
+  ])("animates the first turn fold toggle after $opening", async ({ reopen }) => {
+    const props = baseProps();
+    const ui: FoldTimeline = (key, entries, synced = true) => (
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={key}
+        syncing={!synced}
+        timelineEntries={entries}
+      />
+    );
+    const container = document.createElement("div");
+    container.style.cssText =
+      "height: min(600px, 100vh); width: 900px; display: flex; flex-direction: column;";
+    const entries = foldThread("fold");
+    await using screen = await render(ui(props.routeThreadKey, entries), { container });
+    await foldSettled(screen);
+    await reopen(screen, ui, props.routeThreadKey, entries);
+    await foldSettled(screen);
+    using _timers = fakeTimers();
+    await screen.getByRole("button", { name: /^Worked for/ }).click();
+    await act(() => vi.advanceTimersByTimeAsync(60));
+    const row = screen.container.querySelector<HTMLElement>(
+      '[data-timeline-motion-row="entry-fold-progress"]',
+    )!;
+    const natural = (row.firstElementChild as HTMLElement).offsetHeight;
+    expect(natural).toBeGreaterThan(0);
+    expect(Number.parseFloat(row.style.height)).toBeGreaterThan(0);
+    expect(Number.parseFloat(row.style.height)).toBeLessThan(natural);
+  });
+
+  it("slides the latest running subagent up while its group collapses", async () => {
+    setup();
+    using _threadAtom = vi
+      .spyOn(environmentThreadDetails, "threadAtom")
+      .mockReturnValue(
+        Atom.make({ projection: { subagents: [], turnItems: [], visibleTurnItems: [] } }) as never,
+      );
+    const subagent = (id: string) =>
+      ({
+        id,
+        kind: "event",
+        createdAt: CREATED_AT,
+        projectedItem: v2Item("subagent", {
+          id,
+          runId: null,
+          status: "running",
+          title: `Agent ${id}`,
+          subagentId: id,
+          origin: "provider_native",
+          driver: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          childThreadId: null,
+          prompt: `Inspect ${id}`,
+          result: null,
+        }),
+      }) as Entry;
+    await using screen = await renderTimeline(
+      [
+        message("Earlier reply", { role: "assistant" }, "history"),
+        message("Delegate the review", {}, "prompt"),
+        subagent("a"),
+        subagent("b"),
+        subagent("c"),
+      ],
+      { isWorking: true, runlessWorkActive: true },
+    );
+    const group = () => screen.container.querySelector<HTMLElement>("[data-subagent-group]")!;
+    const latest = () =>
+      [...group().querySelectorAll<HTMLElement>('[data-v2-item-type="subagent"]')].find((row) =>
+        row.textContent?.includes("Agent c"),
+      )!;
+    await vi.waitFor(() => {
+      expect(latest()).toBeDefined();
+      // Legend keeps rows transparent and unclickable until its initial scroll settles.
+      expect(getComputedStyle(group()).pointerEvents).toBe("auto");
+      expect(group().checkVisibility({ opacityProperty: true })).toBe(true);
+    });
+    using _timers = fakeTimers();
+    const toggle = group().querySelector<HTMLElement>("button[aria-expanded]")!;
+    await click(toggle);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    const expandedTop = latest().getBoundingClientRect().top;
+    await click(toggle);
+    await act(() => vi.advanceTimersByTimeAsync(60));
+    const sliding = latest().getBoundingClientRect();
+    const row = group().closest<HTMLElement>("[data-timeline-motion-row]")!;
+    const rowBottom = row.getBoundingClientRect().bottom;
+    const rowMask = row.style.maskImage;
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    const collapsedTop = latest().getBoundingClientRect().top;
+    expect(collapsedTop).toBeLessThan(expandedTop - 20);
+    expect(sliding.top).toBeGreaterThan(collapsedTop);
+    expect(sliding.top).toBeLessThan(expandedTop);
+    expect(sliding.bottom).toBeLessThanOrEqual(rowBottom + 1);
+    expect(rowMask).toBe("");
+  });
+});
+
+describe("MessagesTimeline messages", () => {
+  it("preserves the visible message when earlier history is prepended", async () => {
+    const props = baseProps();
+    const entries = Array.from({ length: 20 }, (_, index) =>
+      message(`Context ${index}\n\n${"Conversation details. ".repeat(12)}`, {}, `context-${index}`),
+    );
+    const earlier = Array.from({ length: 6 }, (_, index) =>
+      message(`Earlier ${index}\n\n${"Conversation details. ".repeat(12)}`, {}, `earlier-${index}`),
+    );
+    const container = document.createElement("div");
+    container.style.cssText = "height: 400px; width: 800px; display: flex; flex-direction: column;";
+    const timeline = (items: Entry[]) => (
+      <MessagesTimeline {...props} liveFollowEnabled={false} timelineEntries={items} />
+    );
+    await using screen = await render(timeline(entries), { container });
+    await act(() => props.listRef.current!.scrollToIndex({ index: 8, animated: false }));
+    const top = props.listRef.current!.getState().elementAtIndex(8)!.getBoundingClientRect().top;
+    await screen.rerender(timeline([...earlier, ...entries]));
+    await vi.waitFor(() => {
+      const state = props.listRef.current!.getState();
+      const index = state.indexByKey("entry-context-8")!;
+      const after = state.elementAtIndex(index)!.getBoundingClientRect().top;
+      // LegendList anchors to the browser's whole-pixel scroll offset, so a fractional row top
+      // can land up to a pixel away.
+      expect(Math.abs(after - top)).toBeLessThan(1);
+    });
+  });
+});
 
 it("paces activity changes while keeping progress live and selecting the newest pending entry", async () => {
   setup();
@@ -532,6 +737,7 @@ it("paces new assistant packets, drains after completion, and reveals all text f
     />,
   );
   const searchGroup = screen.getByRole("button", { name: "Searching", exact: true });
+  await act(() => vi.advanceTimersByTimeAsync(1000));
   await searchGroup.click();
   await expect.element(screen.getByText("src/filter.ts", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("filterEntries", { exact: true })).toBeVisible();
@@ -587,4 +793,73 @@ it("paces new assistant packets, drains after completion, and reveals all text f
     .element(screen.getByRole("button", { name: "Worked for 20s", exact: true }))
     .toBeVisible();
   expect(durationHeader()).toBeNull();
+});
+
+it("holds a new reply's paced text until a beat after the live preview collapses", async () => {
+  setup();
+  const runId = RunId.make("collapse-run");
+  const command = (id: string) =>
+    work(id, {
+      runId,
+      itemType: "command_execution",
+      tone: "tool",
+      label: "Command",
+      command: `echo ${id}`,
+      detail: `${id} output`,
+      toolLifecycleStatus: "completed",
+    });
+  const entries = [message("Run the commands", { runId }, "prompt"), command("a"), command("b")];
+  const source = "The commands finished cleanly. ".repeat(20);
+  const props = {
+    ...baseProps(),
+    isWorking: true,
+    latestRun: { runId, status: "running", startedAt: CREATED_AT, completedAt: null },
+  } satisfies Omit<TimelineProps, "timelineEntries">;
+  const ui = (reply: Entry[]) => (
+    <MessagesTimeline {...props} timelineEntries={[...entries, ...reply]} />
+  );
+  const container = document.createElement("div");
+  container.style.cssText = "height: 600px; width: 800px; display: flex; flex-direction: column;";
+  await using screen = await render(ui([]), { container });
+  await vi.waitFor(() =>
+    expect(
+      screen.container
+        .querySelector('[data-timeline-row-kind="work-live"]')!
+        .checkVisibility({ opacityProperty: true }),
+    ).toBe(true),
+  );
+  using _timers = fakeTimers();
+  const reply = (streaming: boolean, text = source) => [
+    message(text, { role: "assistant", runId, streaming }, "reply"),
+  ];
+  const body = () =>
+    screen.container.querySelector('[data-timeline-row-id="entry-reply"] .chat-markdown')!;
+  const animating = () =>
+    screen.container.querySelector("[data-timeline-motion-row][style*=height]");
+  await screen.rerender(ui(reply(true)));
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  expect(screen.container.querySelector('[data-timeline-row-kind="work-toggle"]')).not.toBeNull();
+  expect(animating()).not.toBeNull();
+  expect(body().textContent).toBe("");
+  await act(() => vi.advanceTimersByTimeAsync(180));
+  expect(animating()).toBeNull();
+  expect(body().textContent).toBe("");
+  await act(() => vi.advanceTimersByTimeAsync(1000));
+  const resumed = body().textContent!;
+  expect(resumed.length).toBeGreaterThan(0);
+  expect(source.startsWith(resumed)).toBe(true);
+  await act(() => vi.advanceTimersByTimeAsync(10_000));
+  expect(body().textContent).toBe(source.trimEnd());
+  // The final chunk lands with the end of the reply while rows animate.
+  await click(
+    screen.container.querySelector<HTMLElement>(
+      '[data-timeline-row-kind="work-toggle"] button[aria-expanded]',
+    )!,
+  );
+  const final = `${source}Done.`;
+  await screen.rerender(ui(reply(false, final)));
+  await act(() => vi.advanceTimersByTimeAsync(300));
+  expect(body().textContent).toBe(source.trimEnd());
+  await act(() => vi.advanceTimersByTimeAsync(10_000));
+  expect(body().textContent).toBe(final);
 });
