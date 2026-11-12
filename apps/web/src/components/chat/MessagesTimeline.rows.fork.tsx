@@ -30,12 +30,12 @@ export function isForkTimelineRow(row: TimelineRow): boolean {
  * Mirrors the wrapper `TimelineRowContent` renders for these kinds. A plain render function, so
  * a row that switches between a fork kind and an upstream one under one id keeps its wrapper.
  */
-export function renderForkTimelineRow(row: TimelineRow) {
+export function renderForkTimelineRow(row: TimelineRow, exiting: boolean) {
   return (
     <div
       className={cn(row.kind === "working" && "pb-1.5")}
-      data-timeline-row-id={row.id}
-      data-timeline-row-kind={row.kind}
+      data-timeline-row-id={exiting ? undefined : row.id}
+      data-timeline-row-kind={exiting ? undefined : row.kind}
     >
       <ForkTimelineRowContent row={row} />
     </div>

@@ -51,6 +51,12 @@ it("shows an existing snapshot immediately and cancels work on disposal", () => 
   expect(presentation.getProgress().visible).toBe(14);
   expect(presentation.getPending()).toBe(true);
   expect(clock.callbacks.size).toBe(1);
+  presentation.update("existing reply with new content", false, true);
+  expect(clock.callbacks.size).toBe(0);
+  clock.advance(1000);
+  expect(presentation.getProgress().visible).toBe(14);
+  presentation.update("existing reply with new content");
+  expect(clock.callbacks.size).toBe(1);
   presentation.dispose();
   expect(clock.callbacks.size).toBe(0);
 });
