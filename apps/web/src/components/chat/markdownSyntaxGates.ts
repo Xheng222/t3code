@@ -1,4 +1,4 @@
-import type { Nodes as MdastNodes } from "mdast";
+import type { Code, Nodes as MdastNodes, Root } from "mdast";
 import {
   type Extension as MdastExtension,
   fromMarkdown,
@@ -174,7 +174,7 @@ function attachParserWithoutUnusedSyntax(this: Processor) {
   const data = this.data();
   const byMask = new Map<number, FromMarkdownOptions["extensions"]>();
   let mdastExtensions: MdastExtension[] | undefined;
-  this.parser = (document) => {
+  const parse = (document: string) => {
     let mask = 0;
     GATES.forEach((gate, index) => {
       if (!gate.inText(document)) mask |= 1 << index;
@@ -198,6 +198,45 @@ function attachParserWithoutUnusedSyntax(this: Processor) {
     } finally {
       parsing = outer;
     }
+  };
+  let fence: { opening: string; node: Code; closing: RegExp } | undefined;
+  this.parser = (document) => {
+    // An open standalone fence is literal code; parsing its growing body creates no new syntax.
+    const opening = /^(?:`{3,}|~{3,})[^\n]*\n/.exec(document)?.[0];
+    if (!opening || document.includes("\r")) return parse(document);
+    if (fence?.opening !== opening) {
+      const node = parse(opening).children[0];
+      if (node?.type !== "code") return parse(document);
+      const marker = /^(`+|~+)/.exec(opening)![1]!;
+      fence = {
+        opening,
+        node,
+        closing: new RegExp(`^ {0,3}${marker[0]}{${marker.length},}[ \\t]*$`, "m"),
+      };
+    }
+    const body = document.slice(opening.length);
+    if (fence.closing.test(body)) return parse(document);
+    let line = 1;
+    let lineStart = 0;
+    for (let end = document.indexOf("\n"); end !== -1; end = document.indexOf("\n", lineStart)) {
+      line += 1;
+      lineStart = end + 1;
+    }
+    const position = {
+      start: { line: 1, column: 1, offset: 0 },
+      end: { line, column: document.length - lineStart + 1, offset: document.length },
+    };
+    return {
+      type: "root",
+      children: [
+        {
+          ...fence.node,
+          value: (body.endsWith("\n") ? body.slice(0, -1) : body).replaceAll("\0", "\uFFFD"),
+          position: { start: { ...position.start }, end: { ...position.end } },
+        },
+      ],
+      position,
+    } satisfies Root;
   };
 }
 

@@ -293,7 +293,8 @@ it("app-stream-assistant-turn", async () => {
   // per delta, and history rows not at all.
   expect(counted.components.ConversationTimeline).toBeLessThanOrEqual(3);
   expect(counted.components.UserTimelineRow).toBeUndefined();
-  expect(counted.components.AssistantTimelineRow).toBe(STREAM_DELTAS);
+  // Paced reveal renders the row on its own clock, at most once per delta.
+  expect(counted.components.AssistantTimelineRow).toBeLessThanOrEqual(STREAM_DELTAS);
   // Each delta adds a paragraph; finished blocks keep their render.
   expect(counted.components.MarkdownParagraph).toBe(STREAM_DELTAS);
   await report("app-stream-assistant-turn", [counted], { commits: false });
