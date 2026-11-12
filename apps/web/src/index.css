@@ -2254,6 +2254,28 @@ code {
   background: transparent !important;
 }
 
+.chat-markdown-shiki code[data-incremental],
+[data-streaming-presentation] .chat-markdown-shiki code {
+  display: block;
+  white-space: normal;
+
+  > .line {
+    display: block;
+    min-height: 1lh;
+    white-space: pre;
+  }
+
+  > .line:last-child:empty {
+    min-height: 0;
+  }
+}
+
+.chat-markdown-codeblock[data-wrap="true"] code[data-incremental] > .line,
+[data-streaming-presentation] .chat-markdown-codeblock[data-wrap="true"] code > .line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Plain-text fences override the highlighter's inline foreground colors. */
 :is(.chat-markdown, .composer-tiptap)
   .chat-markdown-codeblock:is(
@@ -2294,6 +2316,17 @@ code {
 
     @starting-style {
       opacity: 0;
+    }
+  }
+
+  [data-streaming-presentation] .chat-markdown[data-streaming] > *,
+  [data-streaming-presentation]
+    .chat-markdown[data-streaming]
+    :is(.chat-markdown-shiki, .chat-markdown-mermaid) {
+    transition: none;
+
+    @starting-style {
+      opacity: 1;
     }
   }
 }

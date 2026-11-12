@@ -6,10 +6,17 @@ import {
   type TokensResult,
 } from "@pierre/diffs";
 
+const LINE_BREAK = { type: "text" as const, value: "\n" };
+
 function highlightedDocument(
   result: TokensResult,
   lines = renderTokenLines(result.tokens, {}),
 ): { type: "root"; children: ReturnType<typeof renderTokenLines> } {
+  const children: ReturnType<typeof renderTokenLines> = [];
+  for (const line of lines) {
+    if (children.length > 0) children.push(LINE_BREAK);
+    children.push(line);
+  }
   return {
     type: "root" as const,
     children: [
@@ -35,9 +42,7 @@ function highlightedDocument(
             type: "element" as const,
             tagName: "code",
             properties: {},
-            children: lines.flatMap((line, index) =>
-              index === 0 ? [line] : [{ type: "text" as const, value: "\n" }, line],
-            ),
+            children,
           },
         ],
       },
@@ -58,6 +63,7 @@ export function createIncrementalHighlightedDocument(
   highlighter: DiffsHighlighter,
   language: string,
   theme: DiffsThemeNames,
+  syntheticTrailingNewline = false,
 ) {
   const options = { lang: language, theme };
   let shell: TokensResult | undefined;
@@ -79,17 +85,20 @@ export function createIncrementalHighlightedDocument(
         dispose();
         return highlightCodeToHast(highlighter, code, language, theme);
       }
-      if (!code.startsWith(previous)) dispose();
+      // Markdown adds a display newline that moves as its unfinished final line grows.
+      const trailingNewline = syntheticTrailingNewline && code.endsWith("\n");
+      const source = trailingNewline ? code.slice(0, -1) : code;
+      if (!source.startsWith(previous)) dispose();
       // Created on first use so an unknown language throws inside the caller's fallback.
       shell ??= highlighter.codeToTokens("", options);
       tokenizer ??= highlighter.createStreamTokenizer(options);
-      const update = tokenizer.enqueue(code.slice(previous.length));
+      const update = tokenizer.enqueue(source.slice(previous.length));
       if (update instanceof Promise) {
         dispose();
         void update.catch(() => {});
         return highlightCodeToHast(highlighter, code, language, theme);
       }
-      previous = code;
+      previous = source;
       let line: ThemedToken[] = [];
       for (const token of update.stable) {
         if (token.content === "\n") {
@@ -100,7 +109,7 @@ export function createIncrementalHighlightedDocument(
       // Completed line nodes retain their identity while the final line changes.
       return highlightedDocument(shell, [
         ...completedLines,
-        ...renderTokenLines([update.unstable], {}),
+        ...renderTokenLines(trailingNewline ? [update.unstable, []] : [update.unstable], {}),
       ]);
     },
     { dispose },
