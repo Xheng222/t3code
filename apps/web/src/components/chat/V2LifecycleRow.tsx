@@ -220,7 +220,7 @@ const STATUS_VISUALS: Record<
   },
 };
 
-function subagentStatusVisual(status: OrchestrationV2TurnItem["status"]) {
+export function subagentStatusVisual(status: OrchestrationV2TurnItem["status"]) {
   return STATUS_VISUALS[status];
 }
 

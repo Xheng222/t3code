@@ -83,6 +83,7 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivityCopy";
 import { isHostPath } from "@t3tools/shared/path";
+import type { ProcessRowHooks, WorkWaitingRow } from "./MessagesTimeline.logic.fork";
 
 export function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message") {
@@ -97,7 +98,7 @@ export function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   return entry.kind === "work" ? (entry.entry.runId ?? null) : null;
 }
 
-function workEntryIsActiveTurnActivity(entry: WorkLogEntry): boolean {
+export function workEntryIsActiveTurnActivity(entry: WorkLogEntry): boolean {
   return (
     entry.toolLifecycleStatus === "inProgress" ||
     (entry.toolLifecycleStatus === undefined &&
@@ -121,7 +122,7 @@ function singleToolCallLabel(entry: WorkLogEntry, resolve: MessageResolver): str
   return workEntryDisplayLabel(entry, undefined, resolve);
 }
 
-function workEntryToolDataRecord(entry: WorkLogEntry): Record<string, unknown> | undefined {
+export function workEntryToolDataRecord(entry: WorkLogEntry): Record<string, unknown> | undefined {
   return entry.toolData !== null &&
     typeof entry.toolData === "object" &&
     !Array.isArray(entry.toolData)
@@ -129,7 +130,7 @@ function workEntryToolDataRecord(entry: WorkLogEntry): Record<string, unknown> |
     : undefined;
 }
 
-function workEntryReadRawPaths(entry: WorkLogEntry): readonly string[] {
+export function workEntryReadRawPaths(entry: WorkLogEntry): readonly string[] {
   const fromChanged = entry.changedFiles ?? [];
   if (fromChanged.length > 0) return fromChanged;
   const structured = entry.structuredPayload;
@@ -516,13 +517,14 @@ export type TimelineLatestRun = Pick<
   "runId" | "status" | "startedAt" | "completedAt" | "turnEnded"
 >;
 
-const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
+export const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
 export type MessagesTimelineRow = MessagesTimelineRowContent & {
   readonly continuesWorkLog?: boolean;
 };
 
 type MessagesTimelineRowContent =
+  | WorkWaitingRow
   | {
       kind: "worktree-setup";
       id: string;
@@ -536,6 +538,9 @@ type MessagesTimelineRowContent =
       createdAt: string;
       groupedEntries: WorkLogEntry[];
       isExpandedToolGroup: boolean;
+      groupId?: string;
+      groupTail?: boolean;
+      groupViewedImagePaths?: ReadonlyArray<string>;
       displayLabel?: string;
     }
   | {
@@ -553,6 +558,7 @@ type MessagesTimelineRowContent =
       kind: "working";
       id: string;
       createdAt: string | null;
+      completedAt?: string | null;
       /** A running compaction owns the working row, so its divider appears only once it ends. */
       compacting?: true;
     }
@@ -654,6 +660,8 @@ type MessagesTimelineRowContent =
       projectedItem: OrchestrationV2ProjectedTurnItem;
       subagents?: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
       resourceSummary?: boolean;
+      processGroupActive?: boolean;
+      waitingLabel?: string;
     }
   | {
       kind: "proposed-plan";
@@ -688,7 +696,7 @@ export interface StableMessagesTimelineRowsState {
   result: MessagesTimelineRow[];
 }
 
-function workGroupId(timelineEntryId: string): string {
+export function workGroupId(timelineEntryId: string): string {
   return `work-group:${timelineEntryId}`;
 }
 
@@ -706,7 +714,7 @@ function expandedWorkGroupRow(
   };
 }
 
-function viewedImagesRows(
+export function viewedImagesRows(
   groupId: string,
   createdAt: string,
   groupedEntries: ReadonlyArray<WorkLogEntry>,
@@ -984,7 +992,7 @@ function responseBoundaryRunId(entry: TimelineEntry): RunId | null {
 }
 
 // Group promptless restarts under the initiating prompt until settled.
-function lastResponseBoundaryIndex(timelineEntries: ReadonlyArray<TimelineEntry>): number {
+export function lastResponseBoundaryIndex(timelineEntries: ReadonlyArray<TimelineEntry>): number {
   return timelineEntries.findLastIndex(timelineEntryStartsResponse);
 }
 
@@ -1629,6 +1637,11 @@ export function deriveMessagesTimelineRows(
     worktreeSetup?: WorktreeSetupSnapshot | null;
     toolCallVisibility?: ToolCallVisibility;
     revealedMessageId?: MessageId | null;
+    /** Entries before turn presentation held any back; terminal replies come from these. */
+    sourceTimelineEntries?: ReadonlyArray<TimelineEntry>;
+    /** Runs whose reply is still presenting stay unfolded under the working header. */
+    presentingRunIds?: ReadonlySet<RunId>;
+    processRows?: ProcessRowHooks;
   },
   resolve: MessageResolver = m,
 ): MessagesTimelineRow[] {
@@ -1657,7 +1670,9 @@ export function deriveMessagesTimelineRows(
       })
     : new Map<MessageId, number>();
   const nextRows: MessagesTimelineRow[] = [];
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(
+    input.sourceTimelineEntries ?? timelineEntries,
+  );
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const itemizedRunIds = itemizedFailedRunIds(
     timelineEntries,
@@ -1688,7 +1703,11 @@ export function deriveMessagesTimelineRows(
           timelineEntries: timelineEntries,
           terminalAssistantMessageIds,
           latestRun: input.latestRun ?? null,
-          unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
+          unfoldedRunIds: new Set([
+            ...activeVisualResponseRunIds,
+            ...failedRunIds,
+            ...(input.presentingRunIds ?? []),
+          ]),
           runlessWorkActive,
           liveSubagentEntryIds,
           retainedAssistantReplyEntryIds: retainedAssistantReplyIds,
@@ -1730,9 +1749,15 @@ export function deriveMessagesTimelineRows(
     entry.toolLifecycleStatus === "inProgress" &&
     (entry.runId == null ? runlessWorkActive : entry.runId === unsettledRunId);
 
-  const activeTurnHeaderIndex = input.isWorking
+  const presentingRun =
+    input.latestRun && input.presentingRunIds?.has(input.latestRun.runId) ? input.latestRun : null;
+  const showWorkingHeader = input.isWorking || presentingRun !== null;
+  const activeTurnHeaderIndex = showWorkingHeader
     ? lastResponseBoundaryIndex(timelineEntries) + 1
     : timelineEntries.length;
+  const lastAssistantMessageIndex = timelineEntries.findLastIndex(
+    (entry) => entry.kind === "message" && entry.message.role === "assistant",
+  );
 
   const activeToolEntries: Array<Extract<TimelineEntry, { kind: "work" }>> = [];
   if (input.isWorking && (unsettledRunId !== null || runlessWorkActive)) {
@@ -1898,7 +1923,9 @@ export function deriveMessagesTimelineRows(
       createdAt:
         (compactsOnReturn ? undefined : resumeCompactionEntry?.entry.createdAt) ??
         input.activeTurnStartedAt ??
+        presentingRun?.startedAt ??
         null,
+      ...(presentingRun?.completedAt ? { completedAt: presentingRun.completedAt } : {}),
       ...(activeCompactionRunId !== null ? { compacting: true as const } : {}),
     });
   };
@@ -1906,6 +1933,12 @@ export function deriveMessagesTimelineRows(
   const hasActiveCompaction =
     activeCompactionEntry !== undefined || (activeRunIsCompaction && !compactionRunFinished);
   const appendActiveWorkRows = () => {
+    if (input.processRows && activeWorkAnchor) {
+      const live = input.processRows.liveRows(activeWorkAnchor, visibleActiveToolEntries, input);
+      nextRows.push(...live.rows);
+      hasActivityRow ||= live.active;
+      return;
+    }
     if (activeWorkRow === null) return;
     nextRows.push(activeWorkRow);
     hasActivityRow ||= activeWorkRow.active;
@@ -1933,7 +1966,7 @@ export function deriveMessagesTimelineRows(
       continue;
     }
 
-    if (input.isWorking && index === activeTurnHeaderIndex) {
+    if (showWorkingHeader && index === activeTurnHeaderIndex) {
       appendWorkingRow();
     }
 
@@ -2106,7 +2139,11 @@ export function deriveMessagesTimelineRows(
       const visibleGroupedEntries = groupedEntries.filter((entry) =>
         workEntryIsVisibleInGroup(entry, workEntryIsInActiveRun(entry)),
       );
-      if (visibleGroupedEntries.length > 0) {
+      if (input.processRows && visibleGroupedEntries.length > 0) {
+        nextRows.push(
+          ...input.processRows.groupRows(timelineEntry, visibleGroupedEntries, input, resolve),
+        );
+      } else if (visibleGroupedEntries.length > 0) {
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
         if (activeInProgressToolEntries.length > 0) {
           const groupId = workGroupId(timelineEntry.id);
@@ -2271,6 +2308,14 @@ export function deriveMessagesTimelineRows(
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         projectedItem: timelineEntry.projectedItem,
+        ...(input.processRows && timelineEntry.projectedItem.item.type === "subagent"
+          ? {
+              processGroupActive:
+                input.isWorking &&
+                index > lastAssistantMessageIndex &&
+                runIdIsActiveResponse(timelineEntry.projectedItem.item.runId),
+            }
+          : {}),
       });
       continue;
     }
@@ -2378,10 +2423,11 @@ export function deriveMessagesTimelineRows(
     latestTimelineEntry.message.role === "assistant" &&
     latestTimelineEntry.message.streaming;
   const hasWorkingRow = nextRows.some((row) => row.kind === "working");
-  if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
+  if (showWorkingHeader && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
   }
   if (
+    (!input.processRows || input.toolCallVisibility === "zen") &&
     input.isWorking &&
     input.latestRun?.turnEnded !== true &&
     !replyIsStreaming &&
@@ -2420,7 +2466,24 @@ export function deriveMessagesTimelineRows(
     }
   }
 
-  const result = attachTrailingToolGroupsToAssistant(
+  if (input.processRows && unsettledRunId !== null) {
+    // Process rows carry the trailing thinking row's waiting label on the run's subagent row.
+    const waitingOn = runningSubagentsAtRunTail(
+      input.sourceTimelineEntries ?? input.timelineEntries,
+      unsettledRunId,
+    );
+    const index = nextRows.findLastIndex(
+      (row) =>
+        row.kind === "event" &&
+        row.projectedItem.item.type === "subagent" &&
+        row.projectedItem.item.runId === unsettledRunId,
+    );
+    const row = nextRows[index];
+    if (waitingOn > 0 && row?.kind === "event") {
+      nextRows[index] = { ...row, waitingLabel: waitingOnSubagentsLabel(waitingOn, resolve) };
+    }
+  }
+  const result = (input.processRows?.finishRows ?? attachTrailingToolGroupsToAssistant)(
     attachCreatedThreadSummaries(nextRows, timelineEntries, collapsedFoldMemberIds),
   );
   return result.map((row, index) => {
@@ -2569,6 +2632,8 @@ function replaceStreamingMessageRows(
     expandedWorkGroupIds: previousExpandedGroups,
     pendingApprovalRequestIds: previousPendingApprovalRequestIds,
     availableRevertTurnCounts: previousAvailableRevertTurnCounts,
+    sourceTimelineEntries: previousSourceEntries,
+    presentingRunIds: previousPresentingRuns,
     ...previousContext
   } = previous.input;
   const {
@@ -2580,12 +2645,20 @@ function replaceStreamingMessageRows(
     expandedWorkGroupIds,
     pendingApprovalRequestIds,
     availableRevertTurnCounts,
+    sourceTimelineEntries,
+    presentingRunIds,
     ...context
   } = input;
   // Shell/checkpoint selectors rebuild summaries per event; compare contents.
   if (
     timelineEntries.length !== previousEntries.length ||
     !shallow(previousContext, context) ||
+    !shallow(previousPresentingRuns, presentingRunIds) ||
+    (previousSourceEntries !== sourceTimelineEntries &&
+      !shallow(
+        deriveTerminalAssistantMessageIds(previousSourceEntries ?? previousEntries),
+        deriveTerminalAssistantMessageIds(sourceTimelineEntries ?? timelineEntries),
+      )) ||
     !shallow(previousRun, latestRun) ||
     !shallow(previousExpandedRuns, expandedRunIds) ||
     !shallow(previousExpandedAttempts, expandedAttemptIds) ||
@@ -2767,12 +2840,16 @@ export function computeStableMessagesTimelineRows(
 }
 
 function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean {
-  if (a.kind !== b.kind || a.id !== b.id) return false;
+  if (a.kind !== b.kind || a.id !== b.id || a.continuesWorkLog !== b.continuesWorkLog) return false;
 
   switch (a.kind) {
+    case "work-waiting":
+      return a.createdAt === (b as typeof a).createdAt && a.label === (b as typeof a).label;
     case "working":
       return (
-        a.createdAt === (b as typeof a).createdAt && a.compacting === (b as typeof a).compacting
+        a.createdAt === (b as typeof a).createdAt &&
+        a.completedAt === (b as typeof a).completedAt &&
+        a.compacting === (b as typeof a).compacting
       );
     case "thinking": {
       const bt = b as typeof a;
@@ -2862,6 +2939,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       return (
         a.projectedItem === (b as typeof a).projectedItem &&
         a.resourceSummary === (b as typeof a).resourceSummary &&
+        a.processGroupActive === (b as typeof a).processGroupActive &&
+        a.waitingLabel === (b as typeof a).waitingLabel &&
         Equal.equals(a.subagents, (b as typeof a).subagents)
       );
 
@@ -2869,6 +2948,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       const bw = b as typeof a;
       return (
         a.isExpandedToolGroup === bw.isExpandedToolGroup &&
+        a.groupId === bw.groupId &&
+        a.groupTail === bw.groupTail &&
+        Equal.equals(a.groupViewedImagePaths, bw.groupViewedImagePaths) &&
         a.displayLabel === bw.displayLabel &&
         Equal.equals(a.groupedEntries, bw.groupedEntries)
       );
@@ -2940,6 +3022,7 @@ export function sameRowsInput(
     const next = right[key];
     if (Object.is(previous, next)) continue;
     if (previous instanceof Set && next instanceof Set && shallow(previous, next)) continue;
+    if (left.processRows?.sameInputValue(previous, next)) continue;
     return false;
   }
   return Object.keys(left).length === Object.keys(right).length;

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type { AssistantCitationRequest, AssistantCitationTarget } from "./AssistantCitationSource";
-import type { CitationPhase } from "./citationProcedure";
 
 const CITATION_SCROLL_KEYS = new Set([
   "ArrowUp",
@@ -30,14 +29,18 @@ interface CitationSettlement {
   readonly dismissed: boolean;
 }
 
+/**
+ * Takes the history outcome rather than the row phase, so the timeline knows whether a citation
+ * is positioning before it derives rows; it pairs `target` with the cited row itself.
+ */
 export function useAssistantCitationTarget({
   request,
-  phase,
+  failed,
   viewport,
   onManualNavigation,
 }: {
   request: AssistantCitationRequest | null;
-  phase: CitationPhase | null;
+  failed: boolean;
   viewport: HTMLElement | null;
   onManualNavigation: () => void;
 }) {
@@ -135,17 +138,9 @@ export function useAssistantCitationTarget({
   useEffect(() => current?.attachDismissal(viewport), [current, viewport]);
 
   const settled = current !== null && settlement?.target === current.target ? settlement : null;
-  const target =
-    current !== null && phase?._tag === "ready" && listLoaded && settled?.dismissed !== true
-      ? current.target
-      : null;
-  const positioning = current !== null && phase?._tag !== "failed" && settled === null;
-
   return {
-    target,
-    positioning,
+    target: current !== null && listLoaded && settled?.dismissed !== true ? current.target : null,
+    positioning: current !== null && !failed && settled === null,
     onListLoad,
-    alwaysRender:
-      target && positioning && phase?._tag === "ready" ? { keys: [phase.rowId] } : undefined,
   };
 }

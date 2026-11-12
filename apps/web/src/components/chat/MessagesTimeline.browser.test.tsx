@@ -47,6 +47,7 @@ import { ViewedImagesTimelineRow } from "./TimelineWorkEntryRow";
 import {
   THOUGHT_PREVIEW_MAX_LENGTH,
   THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
+  sliceThoughtPreviewSource,
   thoughtPreviewMarkdown,
 } from "./TimelineWorkEntryRow.logic";
 import { wordsHast } from "~/markdown/wordsHast";
@@ -404,7 +405,8 @@ describe("MessagesTimeline work rows", () => {
         ]}
       />,
     );
-    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+    // The fold also holds the turn's earlier reply, so smooth follow crosses thousands of pixels.
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2), { timeout: 3_000 });
   });
 
   it.each(["delegated", "legacy", "missing"] as const)(
@@ -495,6 +497,7 @@ describe("MessagesTimeline work rows", () => {
         detail: "TOOL_OUTPUT_MARKER",
       }),
     ]);
+    await screen.getByRole("button", { name: /Ran 1 command/ }).click();
     const toggle = screen.button(/npm test/);
     await click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -525,7 +528,8 @@ describe("MessagesTimeline work rows", () => {
         }),
       }),
     ]);
-    await click(screen.button("Web search"));
+    await click(screen.button("Searched the web 1 time"));
+    await click(screen.button("Search"));
     const link = [...screen.container.querySelectorAll("a")].find(
       (anchor) => anchor.textContent === "Example Domain",
     );
@@ -1504,28 +1508,56 @@ describe("MessagesTimeline citations", () => {
       .toBeVisible();
   });
 
-  it("lands a citation present at mount under StrictMode", async () => {
-    await using _screen = await renderElement(
+  it("lands a citation present at mount under StrictMode, then presents turns normally", async () => {
+    const props = baseProps();
+    const ui = (later: Entry[] = []) => (
       <StrictMode>
         <MessagesTimeline
-          {...baseProps()}
+          {...props}
+          isWorking={later.length > 0}
+          runlessWorkActive={later.length > 0}
           timelineEntries={[
             message("A question", {}, "question"),
             message("the cited answer", { role: "assistant" }, "cited"),
+            ...later,
           ]}
           citationRequest={CITATION_REQUEST}
           citationHistory={{ _tag: "found" }}
         />
-      </StrictMode>,
-      // The test router mounts route content without StrictMode's effect replay.
-      { router: false },
+      </StrictMode>
     );
+    // The test router mounts route content without StrictMode's effect replay.
+    await using screen = await renderElement(ui(), { router: false });
     // StrictMode replays effect cleanups on mount; the activation must survive them.
     await vi.waitFor(() =>
       expect(document.querySelector("[data-citation-highlighted]")?.textContent).toContain(
         "the cited answer",
       ),
     );
+    // The citation stays in the URL after it lands; a streaming reply holds the work after it again.
+    await screen.rerender(
+      ui([
+        message("Still streaming", { role: "assistant", streaming: true }, "next-reply"),
+        work("later-command", {
+          command: "echo later",
+          label: "Ran echo",
+          tone: "tool",
+          itemType: "command_execution",
+          toolLifecycleStatus: "inProgress",
+          projectedItem: v2Item("command_execution", {
+            input: "echo later",
+            output: "",
+            status: "running",
+          }),
+        }),
+      ]),
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen.container.querySelector('[data-timeline-row-id="entry-next-reply"]'),
+      ).not.toBeNull(),
+    );
+    expect(screen.text()).not.toContain("echo later");
   });
 
   it("moves focus to the cited response so screen readers follow it", async () => {
@@ -2506,26 +2538,9 @@ describe("compact reasoning math", () => {
     ).toEqual(expected);
   });
 
-  it("does not split a surrogate pair at the reasoning preview source limit", async () => {
-    setup();
-    const prefix = `[l](${"u".repeat(8_100)}) `;
-    const filler = "c".repeat(THOUGHT_PREVIEW_SOURCE_MAX_LENGTH - 1 - prefix.length);
-    await using screen = await renderTimeline(
-      [
-        work("thought-1", {
-          label: "Thinking",
-          tone: "thinking",
-          itemType: "reasoning",
-          toolLifecycleStatus: "inProgress",
-          detail: `${prefix}${filler}😀 tail`,
-        }),
-      ],
-      { isWorking: true },
-    );
-    await vi.waitFor(() => {
-      expect(screen.text()).toContain(`l ${filler}`);
-    });
-    expect(screen.text()).not.toContain("\uFFFD");
+  it("does not split a surrogate pair at the reasoning preview source limit", () => {
+    const kept = "c".repeat(THOUGHT_PREVIEW_SOURCE_MAX_LENGTH - 1);
+    expect(sliceThoughtPreviewSource(`${kept}😀 tail`)).toBe(kept);
   });
 });
 
