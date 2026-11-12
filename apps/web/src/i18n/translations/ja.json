@@ -1,4 +1,7 @@
 {
+  "fae3639874428042": "タスク",
+  "fb976abe5b22bbe6": "タスク",
+  "6ee23496bef7845d": "{status, select, completed {Completed: {text}} running {In progress: {text}} other {Pending: {text}}}",
   "4bcfa3b976a421cf": "サイドチャット",
   "23be753133ae6950": "スレッド",
   "0001ae5846061bb6": "{machine} 上のスレッド",
