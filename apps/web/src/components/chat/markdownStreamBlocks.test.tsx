@@ -58,6 +58,11 @@ describe("splitMarkdownBlocks", () => {
     "> quote\n\n> another quote\n\n> [!NOTE]\n> alert",
     "| a | b |\n| - | - |\n| 1 | 2 |\n\nAfter the table.",
     "para\n\n    indented code\n\nnext",
+    "para\n~~~ts\nconst a = 1;\n~~~\nnext",
+    "| a | b |\n| - | - |\n~~~ts\nx\n~~~",
+    "> quote\n~~~ts\nx\n~~~",
+    "- list\n~~~ts\nx\n~~~",
+    "para\n```bad`info\ncode\n```",
     "Setext\n===\n\nnext\n---\n\n- [ ] task\n- [x] done",
     "- a\n\n  ```\n  x\n\n```\n\nb",
     "- a\n\n  ```\n  x\n\ny\n\n  ```\n\nb",
@@ -85,7 +90,8 @@ describe("splitMarkdownBlocks", () => {
   it("splits only between closed blocks", () => {
     expect(splitMarkdownBlocks("a\n\n```\nb\n\nc\n```\n\n- d\n\n- e\n\nf")).toEqual([
       "a\n\n",
-      "```\nb\n\nc\n```\n\n- d\n\n- e\n\n",
+      "```\nb\n\nc\n```\n\n",
+      "- d\n\n- e\n\n",
       "f",
     ]);
     expect(splitMarkdownBlocks("a\n\n---\n\nb")).toEqual(["a\n\n", "---\n\n", "b"]);
