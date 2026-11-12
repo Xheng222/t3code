@@ -45,6 +45,12 @@ const FIXTURES = "../src/orchestration-v2/testkit/fixtures";
 export const SCENARIOS = [
   { id: "showcase", name: "Showcase", file: "./dev-replay/showcase_transcript.ndjson" },
   {
+    id: "turn-review",
+    name: "Turn review (slow)",
+    file: "./dev-replay/turn_review_transcript.fork.ndjson",
+    delayMultiplier: 3,
+  },
+  {
     id: "todo-list",
     name: "Plan and reads",
     file: `${FIXTURES}/todo_list/registry_transcript.ndjson`,
@@ -212,9 +218,11 @@ function runAgent(): void {
         resolve();
       });
     });
-  const sleep = (ms: number, signal: AbortSignal) =>
+  const sleep = (ms: number, signal: AbortSignal, delayMultiplier: number) =>
     untilAbort(
-      new Promise((resolve) => setTimeout(resolve, Math.min(ms, MAX_RECORDED_DELAY_MS))),
+      new Promise((resolve) =>
+        setTimeout(resolve, Math.min(ms, MAX_RECORDED_DELAY_MS) * delayMultiplier),
+      ),
       signal,
     );
 
@@ -224,12 +232,14 @@ function runAgent(): void {
     signal: AbortSignal,
   ): Promise<"cancelled" | undefined> => {
     const session = sessions.get(sessionId)!;
+    const scenario = SCENARIOS.find((candidate) => candidate.id === session.model)!;
+    const delayMultiplier = "delayMultiplier" in scenario ? scenario.delayMultiplier : 1;
     // Random, so a session loaded after a restart cannot reuse earlier tool rows.
     const live = { sessionId, workspace: session.cwd, turnKey: NodeCrypto.randomUUID() };
     for (const recorded of turn.frames) {
       const frame = materialize(recorded.frame, live) as LogicalFrame;
       if (frame.kind === "request") {
-        await sleep(recorded.afterMs ?? FRAME_DELAY_MS, signal);
+        await sleep(recorded.afterMs ?? FRAME_DELAY_MS, signal, delayMultiplier);
         if (signal.aborted) return;
         const id = nextAgentRequestId++;
         let answer: unknown;
@@ -266,7 +276,7 @@ function runAgent(): void {
       const firstDelay = recorded.afterMs ?? (text === undefined ? FRAME_DELAY_MS : CHUNK_DELAY_MS);
       const chunks = text === undefined ? [undefined] : streamChunks(text);
       for (const [index, chunk] of chunks.entries()) {
-        await sleep(index === 0 ? firstDelay : CHUNK_DELAY_MS, signal);
+        await sleep(index === 0 ? firstDelay : CHUNK_DELAY_MS, signal, delayMultiplier);
         if (signal.aborted) return;
         send({
           method: frame.method,
