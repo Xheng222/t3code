@@ -996,7 +996,10 @@ function CheckoutGitActionsControl({
     serverConfig?.availableEditors ?? [],
   );
   const threadToastData = activeThreadRef ? { threadRef: activeThreadRef } : undefined;
-  const activeServerThreadShell = useQuietThreadShell(activeThreadRef);
+  const serverBranch = useQuietThreadShell(activeThreadRef, (thread) => thread?.branch);
+  const hasRun = useQuietThreadShell(activeThreadRef, (thread) =>
+    thread ? thread.latestRun !== null : undefined,
+  );
   const activeDraftThread = useComposerDraftStore((store) =>
     draftId
       ? store.getDraftSession(draftId)
@@ -1004,11 +1007,13 @@ function CheckoutGitActionsControl({
         ? store.getDraftThreadByRef(activeThreadRef)
         : null,
   );
-  const activeServerThreadProjection = useQuietThreadProjection(
-    activeDraftThread !== null && activeServerThreadShell === null ? null : activeThreadRef,
+  const projectedBranch = useQuietThreadProjection(
+    serverBranch !== undefined || activeDraftThread !== null ? null : activeThreadRef,
+    (thread) => thread?.projection.thread.branch,
   );
+  const branch = serverBranch !== undefined ? serverBranch : projectedBranch;
   const activeServerThread =
-    activeServerThreadShell ?? activeServerThreadProjection?.projection.thread ?? null;
+    branch !== undefined && activeThreadRef ? { id: activeThreadRef.threadId, branch } : null;
   const isLocalDraftThread = activeDraftThread !== null && activeServerThread === null;
   const canChangeThreadBranch = canWriteSourceControl && (isLocalDraftThread || canOperateThread);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -1223,7 +1228,7 @@ function CheckoutGitActionsControl({
   const gitActionProgress = resolveGitActionProgressPresentation(vcsActionState, messages);
   // A fresh draft or a thread with no turns hides commit, push, and diff rows until there is work.
   const quietEmptyDraft =
-    (draftId !== undefined || activeServerThreadShell?.latestRun === null) &&
+    (draftId !== undefined || hasRun === false) &&
     gitActionProgress === null &&
     !gitStatusError &&
     quickAction.disabled &&
