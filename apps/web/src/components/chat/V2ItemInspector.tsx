@@ -1,6 +1,10 @@
 import { T, Var, useGT } from "gt-react";
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import {
+  isOrchestrationV2WorkActive,
+  type EnvironmentId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@t3tools/contracts";
 import {
   isJsonToolText,
   toolCallLines,
@@ -65,7 +69,7 @@ function SyntaxTokens({
 }
 
 const monoClassName =
-  "font-mono text-(length:--font-size-code,var(--text-2xs)) leading-relaxed whitespace-pre-wrap break-words select-text";
+  "min-w-0 font-mono text-(length:--font-size-code,var(--text-2xs)) leading-relaxed whitespace-pre-wrap wrap-anywhere select-text";
 
 function StructuredValue({
   value,
@@ -80,7 +84,7 @@ function StructuredValue({
   const isJson = highlightJson && isJsonToolText(text);
   if (!text) return null;
   return (
-    <pre className={cn("max-h-80 overflow-auto text-muted-foreground", monoClassName)}>
+    <pre className={cn("text-muted-foreground", monoClassName)}>
       {language || isJson ? (
         <RenderErrorBoundary fallback={text}>
           <Suspense fallback={text}>
@@ -130,6 +134,7 @@ function useFetchedTurnItem(
             ? gt("Output is no longer available.")
             : detail.error,
       empty: fetches && item !== wireItem,
+      running: isOrchestrationV2WorkActive(item.status),
     },
   };
 }
@@ -141,6 +146,7 @@ interface ToolOutputState {
   readonly pending: boolean;
   readonly error: string | null;
   readonly empty: boolean;
+  readonly running?: boolean;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
@@ -173,7 +179,7 @@ function ToolOutput(props: ToolOutputState) {
     </div>
   ) : props.empty && props.images.length === 0 ? (
     <div className="text-muted-foreground italic">
-      <T>No output.</T>
+      {props.running ? <T>Waiting for output…</T> : <T>No output.</T>}
     </div>
   ) : null;
 }
@@ -205,10 +211,20 @@ function ToolCallBody(
     readonly outputSlot?: ReactNode;
   },
 ) {
+  const gt = useGT();
   const call = toolCallLines({ command: props.command, args: props.args });
+  const hasCommand = props.command !== undefined || call.command !== null;
+  const hasOutput = Boolean(
+    hasCommand ||
+    props.outputSlot ||
+    props.output ||
+    props.images.length ||
+    props.pending ||
+    props.error ||
+    props.empty,
+  );
   return (
     <div className={cn("space-y-1.5", monoClassName)}>
-      <ToolOutputImages {...props} />
       {call.command ? <ShellCommandBlock command={call.command} /> : null}
       {call.args ? (
         <div className="text-foreground/85">
@@ -229,12 +245,27 @@ function ToolCallBody(
         </div>
       ) : null}
       {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
-      {props.outputSlot ?? <ToolOutput {...props} />}
-      {props.exitCode !== undefined && props.exitCode !== 0 ? (
-        <div className="text-destructive">
-          <T>
-            exit <Var>{props.exitCode}</Var>
-          </T>
+      {hasOutput ? (
+        <div
+          role="group"
+          aria-label={hasCommand ? gt("Command output") : gt("Tool output")}
+          className="relative ms-6 min-w-0"
+        >
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -start-6 top-0 text-secondary-label"
+          >
+            └─
+          </span>
+          <ToolOutputImages {...props} />
+          {props.outputSlot ?? <ToolOutput {...props} empty={props.empty || hasCommand} />}
+          {props.exitCode !== undefined && props.exitCode !== 0 ? (
+            <div className="text-destructive">
+              <T>
+                exit <Var>{props.exitCode}</Var>
+              </T>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
