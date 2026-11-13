@@ -61,6 +61,7 @@ import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as TurnPresentationDelay from "./TurnPresentationDelay.fork.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 const mockEventSink = (implementation: Partial<EventSink.EventSinkV2["Service"]>) =>
@@ -3163,6 +3164,7 @@ it.effect.each([
       const { written, observed, committedEffects } = yield* captureRootRunTermination({
         key: "hard-stop",
         shouldFinalizeRun: () => Effect.succeed(true),
+        presentationDelayMs: 5_000,
         loadRunInterruptReason: () => Effect.succeed(requestReason),
         events: (ids) =>
           Stream.make({ ...rootTerminalEvent(ids, "interrupted"), reason: providerReason }),
@@ -3177,10 +3179,33 @@ it.effect.each([
         expected,
       );
       assert.deepEqual(
-        committedEffects.map((effect) => effect.request.type),
-        ["checkpoint.capture"],
+        committedEffects.map((effect) => [effect.request.type, effect.availableAt]),
+        [["checkpoint.capture", undefined]],
       );
     }),
+);
+
+it.effect("holds a completed run's checkpoint while a watching client presents its reply", () =>
+  Effect.gen(function* () {
+    const { observed, finalEvents, committedEffects } = yield* captureRootRunTermination({
+      key: "presentation-delay",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      presentationDelayMs: 5_000,
+      events: (ids) => Stream.make(rootTerminalEvent(ids, "completed")),
+    });
+    assert.include(observed, "run:waiting");
+    const attempt = finalEvents.find((event) => event.type === "run-attempt.updated");
+    const completedAt =
+      attempt?.type === "run-attempt.updated" ? attempt.payload.completedAt : null;
+    const [capture] = committedEffects;
+    assert.equal(capture?.request.type, "checkpoint.capture");
+    assert.equal(
+      capture?.availableAt === undefined || completedAt === null
+        ? null
+        : DateTime.toEpochMillis(capture.availableAt) - DateTime.toEpochMillis(completedAt),
+      5_000,
+    );
+  }),
 );
 
 it.effect("records a finished run as failed when its ownership check cannot be read", () =>
@@ -3949,6 +3974,7 @@ function captureRootRunTermination(input: {
   readonly settleStored?: (
     work: RunExecutionService.UnsettledWork,
   ) => RunExecutionService.UnsettledWork;
+  readonly presentationDelayMs?: number;
 }) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(input.key);
@@ -4072,6 +4098,9 @@ function captureRootRunTermination(input: {
               Ref.update(observed, (current) => [...current, "pull-requests-refreshed"]).pipe(
                 Effect.andThen(input.refreshAfterTurn ?? Effect.void),
               ),
+          }),
+          Layer.succeed(TurnPresentationDelay.TurnPresentationDelay, {
+            forCompletedRun: () => Effect.succeed(input.presentationDelayMs ?? 0),
           }),
         ),
       ),

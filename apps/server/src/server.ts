@@ -28,6 +28,7 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as TurnPresentationDelay from "./orchestration-v2/TurnPresentationDelay.fork.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as KeepAwake from "./background/KeepAwake.ts";
@@ -607,6 +608,12 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(layerPullRequestService),
       Layer.provide(RuntimeLayer.layerProjectService),
+    ),
+  ),
+  Layer.provide(
+    TurnPresentationDelay.layer.pipe(
+      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(layerBackground),
     ),
   ),
 );
