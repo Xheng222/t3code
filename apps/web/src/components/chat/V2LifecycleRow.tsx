@@ -503,7 +503,7 @@ function SubagentTimelineLink(props: {
       />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="min-w-0 truncate text-xs font-medium text-foreground">
+          <span className="min-w-0 truncate text-xs font-medium text-secondary-label transition-colors group-hover/subagent:text-foreground">
             {props.title}
           </span>
           {remote !== undefined ? (
@@ -565,7 +565,7 @@ function SubagentTimelineLink(props: {
               {...trigger(open, { panel })}
               className={cn(
                 className,
-                "cursor-pointer transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+                "cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
               )}
             >
               {content}
