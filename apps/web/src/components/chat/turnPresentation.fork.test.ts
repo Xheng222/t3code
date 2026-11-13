@@ -1,6 +1,6 @@
 import { expect, it } from "vite-plus/test";
 import { MessageId, RunId } from "@t3tools/contracts";
-import { admitTurnContent } from "./turnPresentation.fork";
+import { admitTurnContent, holdTurnContent } from "./turnPresentation.fork";
 import type { TimelineEntry } from "../../session-logic";
 
 it("admits process content after the preceding prose is presented while keeping user interaction available", () => {
@@ -67,6 +67,19 @@ it("admits process content after the preceding prose is presented while keeping 
   };
   const entries = [first, tool("search"), final, tool("followup"), interaction, user];
   const presented = new Map<string, number>();
+  const held = [first, interaction];
+  expect(holdTurnContent(entries, held).map(({ id }) => id)).toEqual([
+    "first",
+    "question",
+    "steer",
+  ]);
+  const updatedInteraction = { ...interaction, entry: { ...interaction.entry, label: "Answered" } };
+  const heldEntries = holdTurnContent(
+    [updatedInteraction, prose("first", "New content"), ...entries.slice(1, 4), user],
+    held,
+  );
+  expect(heldEntries[0]).toBe(updatedInteraction);
+  expect(heldEntries[1]).toBe(first);
   const shown = (pending: ReadonlySet<string> = new Set()) =>
     admitTurnContent(entries, presented, pending, runId).map(({ id }) => id);
   expect(shown()).toEqual(["first", "question", "steer"]);

@@ -9,6 +9,7 @@ import "~/index.css";
 import { environmentThreadDetails } from "../../state/threads";
 import { act, fakeTimers, render, type Screen } from "../../../test/render";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { CHAT_TIMELINE_ANCHOR_OFFSET } from "./timelineScrollAnchoring";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -332,6 +333,122 @@ describe("MessagesTimeline messages", () => {
       // can land up to a pixel away.
       expect(Math.abs(after - top)).toBeLessThan(1);
     });
+  });
+
+  it("lets the current turn fill the viewport after a send, a revisit, and a resize", async () => {
+    const props = baseProps();
+    const context = Array.from({ length: 12 }, (_, index) =>
+      message(`Context ${index}\n\n${"Conversation details. ".repeat(12)}`, {}, `context-${index}`),
+    );
+    const sent = [...context, message("Next prompt", {}, "sent")];
+    const replied = [
+      ...sent,
+      message("Reply\n\nSecond\n\nThird", { role: "assistant" }, "reply"),
+      message("Also check the footer", { inputIntent: "steer" }, "steer"),
+    ];
+    const container = document.createElement("div");
+    container.style.cssText = "height: 600px; width: 800px; display: flex; flex-direction: column;";
+    const viewport = () => props.listRef.current!.getScrollableNode()!;
+    const distanceFromEnd = () =>
+      viewport().scrollHeight - viewport().clientHeight - viewport().scrollTop;
+    const promptTop = (id: string) => {
+      const state = props.listRef.current!.getState();
+      const row = state.elementAtIndex(state.indexByKey(`entry-${id}`)!) as HTMLElement;
+      return row.getBoundingClientRect().top - viewport().getBoundingClientRect().top;
+    };
+    // The prompt rests at the top once the list sits at the end.
+    const restsAtTop = (id: string) =>
+      vi.waitFor(() => {
+        expect(distanceFromEnd()).toBeLessThan(2);
+        expect(promptTop(id)).toBeCloseTo(CHAT_TIMELINE_ANCHOR_OFFSET, 0);
+      });
+    // The blank space between the last row and the end of the scroll range.
+    const gap = () => {
+      const state = props.listRef.current!.getState();
+      const last = state.elementAtIndex(state.data.length - 1)!.getBoundingClientRect().bottom;
+      return (
+        viewport().scrollHeight -
+        viewport().scrollTop -
+        (last - viewport().getBoundingClientRect().top)
+      );
+    };
+    const gapsWhenReady: number[] = [];
+    // Stands in for follow, which scrolls to the end on layout changes after the gap applies.
+    let following = false;
+    const timeline = (
+      entries: Entry[],
+      anchor: string | null = null,
+      key = props.routeThreadKey,
+    ) => (
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={key}
+        timelineEntries={entries}
+        anchorMessageId={anchor === null ? null : MessageId.make(anchor)}
+        // Follow pauses presentation while it positions a send.
+        presentationPaused={anchor !== null}
+        onAnchorReady={() => {
+          gapsWhenReady.push(gap());
+          // As follow does; finishing it also ends the list's own end anchoring from opening.
+          void props.listRef.current!.scrollToEnd({ animated: false });
+        }}
+        onViewportAttach={(attached) =>
+          attached.onLayoutChanged(() =>
+            queueMicrotask(() => {
+              if (following) attached.scrollNode.scrollTop = attached.scrollNode.scrollHeight;
+            }),
+          )
+        }
+      />
+    );
+    const settled = () =>
+      vi.waitFor(() => {
+        expect(screen.container.querySelector("[data-timeline-motion-row][style*=height]")).toBe(
+          null,
+        );
+        expect(screen.container.querySelector("[data-timeline-motion-row][inert]")).toBe(null);
+      });
+    await using screen = await render(timeline(context), { container });
+    await restsAtTop("context-11");
+
+    await screen.rerender(timeline(sent, "sent"));
+    await restsAtTop("sent");
+    // The send scroll already sees the room.
+    expect(gapsWhenReady[0]).toBeCloseTo(gap(), 0);
+    const end = viewport().scrollHeight;
+    const top = viewport().scrollTop;
+
+    await screen.rerender(timeline(replied));
+    await settled();
+    expect(viewport().scrollHeight).toBe(end);
+    expect(viewport().scrollTop).toBe(top);
+
+    const long = (id: string) =>
+      message(`Long\n\n${"Detail.\n\n".repeat(30)}`, { role: "assistant" }, id);
+    await screen.rerender(timeline([...replied, long("long-1"), long("long-2"), long("long-3")]));
+    await settled();
+    expect(gap()).toBeLessThanOrEqual(17);
+
+    await screen.rerender(timeline(replied));
+    await settled();
+    expect(viewport().scrollHeight).toBe(end);
+
+    await screen.rerender(timeline(context, null, `${props.routeThreadKey}-other`));
+    await restsAtTop("context-11");
+    await screen.rerender(timeline(replied));
+    await restsAtTop("sent");
+
+    // A prompt without a row of its own, such as a compaction, still positions.
+    const reports = gapsWhenReady.length;
+    await screen.rerender(timeline(replied, "compaction"));
+    await vi.waitFor(() => expect(gapsWhenReady.length).toBeGreaterThan(reports));
+    await screen.rerender(timeline(replied));
+
+    following = true;
+    container.style.height = "500px";
+    await restsAtTop("sent");
+    container.style.height = "600px";
+    await restsAtTop("sent");
   });
 });
 
