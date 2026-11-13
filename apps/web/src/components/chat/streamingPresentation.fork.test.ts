@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
-import { createStreamingPresentation, DEFAULT_STREAMING_SPEED } from "./streamingPresentation.fork";
+import { STREAMING_SPEED } from "@t3tools/shared/streamingPace";
+import { createStreamingPresentation } from "./streamingPresentation.fork";
 
 function frames() {
   const callbacks = new Map<number, FrameRequestCallback>();
@@ -30,12 +31,8 @@ it("paces appended graphemes within the speed limit and flushes source replaceme
   presentation.update(text);
   expect(presentation.getProgress()).toEqual({ visible: 1, received: 2004, complete: false });
   for (let tick = 1; tick <= 20; tick++) clock.advance(tick * 100);
-  expect(presentation.getProgress().visible).toBeGreaterThanOrEqual(
-    1 + DEFAULT_STREAMING_SPEED.normal * 2,
-  );
-  expect(presentation.getProgress().visible).toBeLessThanOrEqual(
-    1 + DEFAULT_STREAMING_SPEED.maximum * 2,
-  );
+  expect(presentation.getProgress().visible).toBeGreaterThanOrEqual(1 + STREAMING_SPEED.normal * 2);
+  expect(presentation.getProgress().visible).toBeLessThanOrEqual(1 + STREAMING_SPEED.maximum * 2);
   presentation.update(text);
   expect(presentation.getPending()).toBe(true);
   presentation.update(text, true);
