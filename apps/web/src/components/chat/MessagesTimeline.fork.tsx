@@ -1,16 +1,20 @@
 import { type LegendListProps, type LegendListRef } from "@legendapp/list/react";
+import { type MessageId } from "@t3tools/contracts";
 import {
   useLayoutEffect,
   useRef,
   useState,
   type Dispatch,
   type ReactNode,
+  type RefObject,
   type SetStateAction,
 } from "react";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { observeResize } from "~/lib/observeResize";
 import { useClientSettings } from "../../hooks/useSettings";
 import { type PendingApproval, type TimelineEntry } from "../../session-logic";
 import {
+  messageIsSteer,
   type MessagesTimelineRow,
   type MessagesTimelineRowsInput,
   type TimelineLatestRun,
@@ -27,6 +31,7 @@ import {
   type ForkTimelineRowState,
   type ForkWorkGroupViewState,
 } from "./timelineRowContext.fork";
+import { CHAT_TIMELINE_ANCHOR_OFFSET } from "./timelineScrollAnchoring";
 import { type TimelineViewport } from "./timelineViewport";
 import { useTurnPresentation } from "./turnPresentation.fork";
 import { useStableRows } from "./useTimelineRows";
@@ -54,11 +59,12 @@ export function useForkTimelinePresentation(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun: TimelineLatestRun | null;
   isWorking: boolean;
+  paused: boolean;
   synced: boolean;
   findExpanded: boolean;
   citationPositioning: boolean;
 }) {
-  const { identity, timelineEntries, synced } = input;
+  const { identity, timelineEntries, paused, synced } = input;
   const toolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
   // Opening a thread settles until a frame after its first synced layout; nothing animates
   // or paces before, so rows that arrive with the sync appear as they are.
@@ -70,6 +76,7 @@ export function useForkTimelinePresentation(input: {
     entries: timelineEntries,
     latestRunId: input.latestRun?.runId ?? null,
     isWorking: input.isWorking,
+    paused,
     immediate,
     synced,
   });
@@ -101,8 +108,8 @@ export function useForkTimelinePresentation(input: {
 type ForkTimelinePresentation = ReturnType<typeof useForkTimelinePresentation>;
 
 /**
- * Paced and process rows, work group auto-collapse and motion rows, from the derived rows.
- * Returns the rows the list shows and the fork's list hooks.
+ * Paced and process rows, work group auto-collapse, motion rows and the end gap, from the derived
+ * rows. Returns the rows the list shows and the fork's list hooks.
  */
 export function useForkTimeline(
   presentation: ForkTimelinePresentation,
@@ -113,11 +120,14 @@ export function useForkTimeline(
     workGroupViewState: ForkWorkGroupViewState;
     restoringThreadPosition: boolean;
     prefersReducedMotion: boolean;
+    anchorMessageId: MessageId | null;
+    onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
     activeTurnStartedAt: string | null;
     isPreparingWorktree: boolean;
     isCompacting: boolean;
     awaitingUser: "approval" | "input" | null;
     pendingApprovals: ReadonlyArray<PendingApproval>;
+    listRef: RefObject<LegendListRef | null>;
     navigateTimeline: () => void;
   },
 ) {
@@ -127,6 +137,7 @@ export function useForkTimeline(
     presentedEntries,
     latestRun,
     isWorking,
+    paused,
     findExpanded,
     citationPositioning,
     toolCallVisibility,
@@ -134,9 +145,15 @@ export function useForkTimeline(
     immediate,
     visit,
   } = presentation;
-  const { expandedWorkGroupIds, setExpandedWorkGroupIds, activeTurnStartedAt, navigateTimeline } =
-    input;
-  const pacedRows = usePacedActivityRows(derivedRows, identity, immediate || settling);
+  const {
+    expandedWorkGroupIds,
+    setExpandedWorkGroupIds,
+    anchorMessageId,
+    activeTurnStartedAt,
+    listRef,
+    navigateTimeline,
+  } = input;
+  const pacedRows = usePacedActivityRows(derivedRows, identity, immediate || settling, paused);
   const turnPrompt = timelineEntries.findLast(
     (entry) =>
       entry.kind === "message" &&
@@ -152,8 +169,8 @@ export function useForkTimeline(
       visit.pending.has(tailEntry.message.id) ||
       (visit.completed.get(tailEntry.message.id) ?? 0) < tailEntry.message.text.length);
   const canWait =
-    isWorking &&
-    latestRun?.turnEnded !== true &&
+    (isWorking || anchorMessageId !== null) &&
+    (anchorMessageId !== null || latestRun?.turnEnded !== true) &&
     !presentingProse &&
     !input.isPreparingWorktree &&
     !input.isCompacting &&
@@ -170,6 +187,7 @@ export function useForkTimeline(
           createdAt: activeTurnStartedAt ?? latestRun?.startedAt ?? null,
         }
       : null,
+    anchorMessageId,
   );
   const activeWorkGroups = new Set(
     rawRows.flatMap((row) => (row.kind === "work-live" ? [row.groupId] : [])),
@@ -200,6 +218,7 @@ export function useForkTimeline(
     stableRows,
     identity,
     !input.prefersReducedMotion &&
+      !paused &&
       !findExpanded &&
       !citationPositioning &&
       !input.restoringThreadPosition &&
@@ -219,12 +238,78 @@ export function useForkTimeline(
   useLayoutEffect(() => {
     disclosureCaptureRef.current = captureDisclosure;
   });
+  // The current turn starts at the latest prompt; steers continue it.
+  const turnStartId = rows.findLast(
+    (row) => row.kind === "message" && row.message.role === "user" && !messageIsSteer(row.message),
+  )?.id;
+  // The end gap lets the current turn fill the viewport, so its prompt can rest at the top. It
+  // grows before the list commits shorter content, so the end cannot clamp, and shrinks after
+  // taller content commits. Its padding is its floor. Resize observers keep the viewport and
+  // footer heights, so applying it on motion frames reads no layout.
+  const endGapRef = useRef<HTMLDivElement | null>(null);
+  const endGapLayout = useRef({ viewport: 0, footer: 0 });
+  const applyEndGap = useStableCallback((shrink: boolean) => {
+    const gap = endGapRef.current;
+    const state = listRef.current?.getState();
+    if (!gap || !state) return;
+    const start = turnStartId === undefined ? undefined : state.indexByKey(turnStartId);
+    let room = 0;
+    if (start !== undefined) {
+      room =
+        endGapLayout.current.viewport - CHAT_TIMELINE_ANCHOR_OFFSET - endGapLayout.current.footer;
+      for (let index = start; index < state.data.length && room > 0; index += 1) {
+        room -= state.sizeAtIndex(index) || 0;
+      }
+    }
+    const extra = Math.max(0, Math.round(room));
+    const current = Number.parseFloat(gap.style.minHeight) || 0;
+    if (extra === current || (extra < current && !shrink)) return;
+    gap.style.minHeight = extra > 0 ? `${extra}px` : "";
+  });
+  // The footer resizes with its content and with the gap; what sits above the gap counts.
+  const attachEndGap = useStableCallback((gap: HTMLDivElement) => {
+    endGapRef.current = gap;
+    const footer = gap.parentElement;
+    const stop = footer
+      ? observeResize(footer, () => {
+          endGapLayout.current.footer = footer.offsetHeight - gap.offsetHeight;
+          applyEndGap(true);
+        })
+      : undefined;
+    return () => {
+      stop?.();
+      if (endGapRef.current === gap) endGapRef.current = null;
+    };
+  });
+  const pendingPromptIndex =
+    anchorMessageId === null
+      ? -1
+      : rows.findIndex((row) => row.kind === "message" && row.message.id === anchorMessageId);
+  // Follow positions a send once the rows from it down are measured and the end gap fits them. A
+  // prompt without a row of its own, such as a compaction, positions the end directly.
+  const reportAnchorReady = useStableCallback(() => {
+    const state = listRef.current?.getState();
+    if (anchorMessageId === null || state?.data !== rows) return;
+    const measured =
+      pendingPromptIndex < 0 ||
+      rows.slice(pendingPromptIndex).every((row) => {
+        const index = state.indexByKey(row.id);
+        return index !== undefined && state.sizeAtIndex(index) !== undefined;
+      });
+    if (!measured) return;
+    applyEndGap(true);
+    input.onAnchorReady(
+      anchorMessageId,
+      pendingPromptIndex < 0 ? rows.length - 1 : pendingPromptIndex,
+    );
+  });
   const rowState: ForkTimelineRowState = {
     activityImmediate: immediate || settling,
     seenAssistantMessages: visit.seen,
     onPresentationPendingChange: presentation.onPresentationPendingChange,
     presentedAssistantMessages: visit.completed,
     pendingAssistantMessages: visit.pending,
+    presentationPaused: paused,
     onWorkEntryToggle: captureDisclosure,
     workGroupViewState: input.workGroupViewState,
   };
@@ -233,8 +318,13 @@ export function useForkTimeline(
     exits,
     /** Everything the row frame reads beyond its row; the list re-renders rows when it changes. */
     frameState: { rowState, exits, closingGroups },
-    /** Motion's pinned rows, kept mounted ahead of upstream's. */
-    alwaysRenderKeys: pins,
+    /** Kept mounted ahead of upstream's: motion's pinned rows, and a send's rows while it positions. */
+    alwaysRenderKeys: [
+      ...pins,
+      ...(pendingPromptIndex >= 0 ? rows.slice(pendingPromptIndex).map((row) => row.id) : []),
+    ],
+    /** Each thread mounts its own end gap, so a switch never shows the previous thread's space. */
+    endGap: <div key={identity} ref={attachEndGap} aria-hidden className="pt-3 sm:pt-4" />,
     withRowFrame:
       <Info extends { item: MessagesTimelineRow }>(render: (info: Info) => ReactNode) =>
       (info: Info) => {
@@ -273,19 +363,25 @@ export function useForkTimeline(
             ? true
             : KEEP_READING_POSITION_ON_RESIZE,
     }),
-    /** Motion; attach before follow. */
+    /** Motion and the end gap; attach before follow, whose layout step measures the gap. */
     attach: (viewport: TimelineViewport | null, list: LegendListRef | null) => {
       if (!viewport || !list) return () => {};
       const detachMotion = motion.attach(viewport, list);
       // Resizing the viewport moves the end without changing any content size; follow keeps up
       // without a tween, as during motion.
       let height = viewport.scrollNode.clientHeight;
+      // The window caps the gap's viewport, so a list whose height follows its content does not
+      // grow with its own gap.
+      endGapLayout.current.viewport = Math.min(height, window.innerHeight);
       const stopResize = observeResize(viewport.scrollNode, () => {
         if (viewport.scrollNode.clientHeight === height) return;
         height = viewport.scrollNode.clientHeight;
+        endGapLayout.current.viewport = Math.min(height, window.innerHeight);
         viewport.layoutChanged(true);
       });
+      const stopEndGap = viewport.onLayoutChanged(() => queueMicrotask(() => applyEndGap(true)));
       return () => {
+        stopEndGap();
         stopResize();
         detachMotion();
       };
@@ -304,13 +400,15 @@ export function useForkTimeline(
         if (contentSizeFrame !== null) return;
         contentSizeFrame = requestAnimationFrame(() => {
           contentSizeFrame = null;
+          reportAnchorReady();
           viewport?.layoutChanged(motion.isAnimating());
           onContentSizeChanged();
         });
       };
-      const stopListeningToContentSize = list
-        ?.getState()
-        .listen("totalSize", scheduleContentSizeChanged);
+      const stopListeningToContentSize = list?.getState().listen("totalSize", () => {
+        applyEndGap(false);
+        scheduleContentSizeChanged();
+      });
       const stopListeningToFooterSize = list
         ?.getState()
         .listen("footerSize", scheduleContentSizeChanged);

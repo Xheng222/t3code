@@ -47,12 +47,14 @@ export function usePacedActivity<T>({
   getId,
   getRevision,
   immediate,
+  paused = false,
 }: {
   identity: string;
   items: ReadonlyArray<T>;
   getId: (item: T) => string;
   getRevision?: (item: T) => string | undefined;
   immediate: boolean;
+  paused?: boolean;
 }) {
   const latest = items.at(-1);
   const latestId = latest === undefined ? undefined : getId(latest);
@@ -97,7 +99,7 @@ export function usePacedActivity<T>({
     ) {
       timing.current = { identity, id: shown.id, revision, shownAt: now };
     }
-    if (!waiting || immediate) return;
+    if (!waiting || immediate || paused) return;
     const remaining = timing.current.shownAt + MIN_ACTIVITY_DURATION_MS - now;
     if (remaining <= 0) {
       advance(identity, shown.id);
@@ -105,7 +107,7 @@ export function usePacedActivity<T>({
     }
     const timer = setTimeout(() => advance(identity, shown.id), remaining);
     return () => clearTimeout(timer);
-  }, [identity, shown.id, revision, waiting, immediate]);
+  }, [identity, shown.id, revision, waiting, immediate, paused]);
 
   return selected;
 }
@@ -114,6 +116,7 @@ export function usePacedActivityRows(
   rows: MessagesTimelineRow[],
   identity: string,
   immediate: boolean,
+  paused = false,
 ) {
   const index = rows.findIndex((row) => row.kind === "work-live");
   const row = rows[index];
@@ -125,6 +128,7 @@ export function usePacedActivityRows(
     // A thought can receive its final paragraph in the same batch as the next tool.
     getRevision: (item) => (item.itemType === "reasoning" ? item.detail : undefined),
     immediate: immediate || !group || group.expanded,
+    paused,
   });
   if (!group || !entry || entry.id === group.entry.id) return rows;
   const next = rows.slice();
@@ -142,7 +146,11 @@ export function usePacedActivityRows(
 
 type WaitingActivity = { label: string; createdAt: string | null } | null;
 
-export function deriveProcessGroupRows(rows: MessagesTimelineRow[], waiting: WaitingActivity) {
+export function deriveProcessGroupRows(
+  rows: MessagesTimelineRow[],
+  waiting: WaitingActivity,
+  pendingMessageId: string | null = null,
+) {
   const result: MessagesTimelineRow[] = [];
   const statusCounts = new Map<string, number>();
   let boundary = "start";
@@ -180,6 +188,14 @@ export function deriveProcessGroupRows(rows: MessagesTimelineRow[], waiting: Wai
     }
   }
   const tail = result.at(-1);
+  if (
+    waiting &&
+    tail?.kind === "message" &&
+    tail.message.role === "user" &&
+    tail.message.id === pendingMessageId
+  ) {
+    result.push({ kind: "working", id: `turn-status:${tail.id}`, createdAt: tail.createdAt });
+  }
   if (
     waiting &&
     (!tail || tail.kind === "working" || tail.kind === "message" || tail.kind === "sent-message")
