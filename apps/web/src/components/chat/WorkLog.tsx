@@ -6,6 +6,7 @@ import {
   type ComponentProps,
   type ReactNode,
 } from "react";
+import { TimelineDisclosureIndicator } from "./timelineMotion.fork";
 import { cn } from "../../lib/utils";
 
 const GroupedRows = createContext(false);
@@ -38,6 +39,7 @@ export function WorkLogList({ children }: { children: ReactNode }) {
 type RowContent = {
   icon?: ReactNode;
   label: ReactNode;
+  indicator?: ReactNode;
   trailing?: ReactNode;
   wrapLabel?: boolean;
 };
@@ -52,7 +54,14 @@ export function WorkLogIcon({ children }: { children: ReactNode }) {
   );
 }
 
-function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
+function WorkLogLine({
+  icon,
+  label,
+  indicator,
+  trailing,
+  wrapLabel,
+  interactive,
+}: RowContent & { interactive: boolean }) {
   return (
     <div
       className={cn(
@@ -62,13 +71,17 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
     >
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
         {icon ? <WorkLogIcon>{icon}</WorkLogIcon> : null}
-        <div
-          className={cn(
-            "min-w-0 flex-1 text-secondary-label",
-            !wrapLabel && "truncate [&_*]:whitespace-nowrap",
-          )}
-        >
-          {label}
+        <div className="flex min-w-0 items-start gap-1">
+          <div
+            className={cn(
+              "min-w-0 text-secondary-label transition-colors",
+              interactive && "group-hover/timeline-row:text-foreground",
+              !wrapLabel && "truncate [&_*]:whitespace-nowrap",
+            )}
+          >
+            {label}
+          </div>
+          {indicator}
         </div>
       </div>
       {trailing}
@@ -91,6 +104,7 @@ function useRowClassName(interactive: boolean) {
 export function WorkLogButton({
   icon,
   label,
+  indicator,
   trailing,
   wrapLabel = false,
   ...buttonProps
@@ -98,7 +112,14 @@ export function WorkLogButton({
   const className = useRowClassName(true);
   return (
     <button {...buttonProps} type="button" className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        label={label}
+        indicator={indicator}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+        interactive
+      />
     </button>
   );
 }
@@ -107,6 +128,7 @@ export function WorkLogButton({
 export function WorkLogRow({
   icon,
   label,
+  indicator,
   trailing,
   wrapLabel = false,
   children,
@@ -115,9 +137,24 @@ export function WorkLogRow({
   const className = useRowClassName(rowProps.onClick !== undefined);
   return (
     <div {...rowProps} className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        label={label}
+        indicator={indicator}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+        interactive={rowProps.onClick !== undefined}
+      />
       {children}
     </div>
+  );
+}
+
+export function WorkLogDisclosureIndicator({ expanded }: { expanded: boolean }) {
+  return (
+    <span aria-hidden className="flex h-6 w-4 shrink-0 items-center justify-center">
+      <TimelineDisclosureIndicator expanded={expanded} className="size-3 text-icon-muted" />
+    </span>
   );
 }
 

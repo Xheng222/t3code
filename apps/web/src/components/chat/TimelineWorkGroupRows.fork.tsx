@@ -1,5 +1,11 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
-import { WorkLogBlock, WorkLogButton, WorkLogList, WorkLogRow } from "./WorkLog";
+import {
+  WorkLogBlock,
+  WorkLogButton,
+  WorkLogDisclosureIndicator,
+  WorkLogList,
+  WorkLogRow,
+} from "./WorkLog";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { type ToolActivityIcon } from "@t3tools/contracts";
 import {
@@ -38,11 +44,7 @@ import {
 } from "./TimelineToolActivityIcon";
 import { SimpleWorkEntryRow } from "./TimelineWorkEntryRow.fork";
 import { formatWorkingTimerNow } from "./TimelineWorkGroupRows.logic";
-import {
-  TimelineDisclosure,
-  TimelineDisclosureIndicator,
-  useClosingMotionChildren,
-} from "./timelineMotion.fork";
+import { TimelineDisclosure, useClosingMotionChildren } from "./timelineMotion.fork";
 
 export const WorkGroupSection = memo(function WorkGroupSection({
   anchorKey,
@@ -511,6 +513,7 @@ export function WorkGroupHeader(props: {
       </span>
     ),
     wrapLabel: true,
+    indicator: hasHistory ? <WorkLogDisclosureIndicator expanded={props.expanded} /> : null,
     trailing: (
       <span className="flex h-6 shrink-0 items-center gap-1.5">
         {props.trailing ??
@@ -520,12 +523,6 @@ export function WorkGroupHeader(props: {
               timestampFormat={props.timestampFormat}
             />
           ) : null)}
-        {hasHistory ? (
-          <TimelineDisclosureIndicator
-            expanded={props.expanded}
-            className="size-3 text-icon-muted"
-          />
-        ) : null}
       </span>
     ),
   };
