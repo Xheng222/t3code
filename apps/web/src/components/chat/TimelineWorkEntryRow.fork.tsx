@@ -1,6 +1,6 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
-import { WorkLogDetails, WorkLogIcon, WorkLogRow } from "./WorkLog";
-import { TimelineDisclosure, TimelineDisclosureIndicator } from "./timelineMotion.fork";
+import { WorkLogDetails, WorkLogDisclosureIndicator, WorkLogIcon, WorkLogRow } from "./WorkLog";
+import { TimelineDisclosure } from "./timelineMotion.fork";
 import {
   getQuestionAnswerPreview,
   getQuestionAnswerText,
@@ -516,9 +516,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     ? "font-medium text-warning"
     : showDestructiveRowStyle
       ? "font-medium text-destructive"
-      : workLogEntryIsToolLike(workEntry)
-        ? "text-secondary-label"
-        : "text-foreground/80";
+      : "text-inherit";
   const threadLabel = threadReadLabel(previewText, workEntry, threadTarget, m);
   const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
     .filter(Boolean)
@@ -601,6 +599,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           </p>
         </div>
       }
+      indicator={canExpandProjectedItem ? <WorkLogDisclosureIndicator expanded={expanded} /> : null}
       trailing={
         <>
           {/* First, so revealing it takes label space instead of moving the controls. Notices
@@ -645,14 +644,6 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           !showDestructiveRowStyle &&
           !toolIconAcceptsTint(entryToolIcon) ? (
             <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
-          ) : null}
-          {canExpandProjectedItem ? (
-            <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
-              <TimelineDisclosureIndicator
-                expanded={expanded}
-                className="size-3 text-icon-muted opacity-70"
-              />
-            </span>
           ) : null}
         </>
       }
