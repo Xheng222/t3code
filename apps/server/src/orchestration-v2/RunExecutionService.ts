@@ -61,6 +61,7 @@ import { makeInterruptResultTurnItem } from "./runInterruptResult.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as TurnPresentationDelay from "./TurnPresentationDelay.fork.ts";
 import { userFacingDatabaseErrorMessage } from "./UserFacingErrors.ts";
 
 export interface ProviderEventRoutingState {
@@ -729,6 +730,7 @@ export const layer: Layer.Layer<
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
     const turnAnalytics = yield* ProviderUsageAnalytics.ProviderTurnAnalytics;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+    const presentationDelay = yield* TurnPresentationDelay.TurnPresentationDelay;
 
     const writeFinalRunEvents = Effect.fn("RunExecutionService.writeFinalRunEvents")(
       function* (input: {
@@ -847,20 +849,27 @@ export const layer: Layer.Layer<
                 allocateEventId,
               })
             : [];
-        // The run settles now; turn-end checkpoint capture follows on this thread's effect lane.
-        const persistedStatus = input.terminal.status;
+        const presentationDelayMs =
+          input.terminal.status === "completed"
+            ? yield* presentationDelay.forCompletedRun({
+                threadId: input.run.threadId,
+                runId: input.run.id,
+              })
+            : 0;
+        const holdForPresentation = presentationDelayMs > 0;
+        const persistedStatus = holdForPresentation ? "waiting" : input.terminal.status;
         // Omit delegatedCompletion; the startup snapshot must not overwrite newer acknowledgements, successors, or Stop barriers.
         const { delegatedCompletion: _delegatedCompletion, ...runWithoutDelegatedCompletion } =
           input.run;
         const finalizedRun: OrchestrationV2Run = {
           ...runWithoutDelegatedCompletion,
           status: persistedStatus,
-          completedAt,
+          completedAt: holdForPresentation ? null : completedAt,
         };
         const finalizedRootNode: OrchestrationV2ExecutionNode = {
           ...input.rootNode,
           status: persistedStatus,
-          completedAt,
+          completedAt: holdForPresentation ? null : completedAt,
           checkpointScopeId: input.checkpointScope.id,
         };
         const finalizedProviderThread: OrchestrationV2ProviderThread = {
@@ -891,6 +900,13 @@ export const layer: Layer.Layer<
                       runId: input.run.id,
                       scopeId: input.checkpointScope.id,
                     },
+                    ...(holdForPresentation
+                      ? {
+                          availableAt: DateTime.add(completedAt, {
+                            milliseconds: presentationDelayMs,
+                          }),
+                        }
+                      : {}),
                   },
                 ]
               : [],
