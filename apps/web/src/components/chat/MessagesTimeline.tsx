@@ -177,10 +177,12 @@ const TIMELINE_LIST_FADE_HEADER = (
 function TimelineListFooter({
   composerInset,
   onGrow,
+  endGap,
   children,
 }: {
   readonly composerInset: number;
   readonly onGrow: (() => void) | undefined;
+  readonly endGap?: ReactNode;
   readonly children?: ReactNode;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
@@ -199,7 +201,7 @@ function TimelineListFooter({
     <div>
       <div ref={contentRef}>{children}</div>
       <div aria-hidden style={{ height: composerInset }} />
-      <div aria-hidden className="h-3 sm:h-4" />
+      {endGap ?? <div aria-hidden className="h-3 sm:h-4" />}
     </div>
   );
 }
@@ -327,6 +329,7 @@ interface MessagesTimelineProps {
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
+  presentationPaused?: boolean;
   contentInsetEndAdjustment: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   /** Disable while reading history to prevent LegendList re-pinning near the bottom. */
@@ -430,6 +433,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
+  presentationPaused = false,
   contentInsetEndAdjustment,
   onIsAtEndChange,
   liveFollowEnabled,
@@ -465,6 +469,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     timelineEntries,
     latestRun,
     isWorking,
+    paused: presentationPaused,
     synced: !syncing,
     findExpanded,
     citationPositioning,
@@ -813,11 +818,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
     workGroupViewState,
     restoringThreadPosition,
     prefersReducedMotion,
+    anchorMessageId,
+    onAnchorReady,
     activeTurnStartedAt,
     isPreparingWorktree,
     isCompacting,
     awaitingUser,
     pendingApprovals,
+    listRef,
     navigateTimeline,
   });
   const matchedApprovalRequestIds = new Set<string>();
@@ -1088,7 +1096,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   const handleScroll = () => {
     if (restoringThreadPosition || listRef.current?.getState?.().data !== rows) return;
-    const isAtEnd = rememberPosition(liveFollowEnabled && !anchoredEndSpace);
+    const isAtEnd = rememberPosition(liveFollowEnabled && !presentationPaused);
     if (isAtEnd !== undefined && !citationPositioning) {
       onIsAtEndChange(isAtEnd);
     }
@@ -1433,8 +1441,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   const timelineListFooter = (
     <TimelineListFooter
-      composerInset={anchoredEndSpace ? 0 : contentInsetEndAdjustment}
+      composerInset={contentInsetEndAdjustment}
       onGrow={onFooterGrow}
+      endGap={fork.endGap}
     >
       {footer}
       {unmatchedPendingApprovals.length > 0 ? (
@@ -1514,8 +1523,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
               dataVersion={`${readyCitationRequest?.key ?? listIdentityKey}:${alwaysRenderKeys.join(",")}`}
               {...(alwaysRender ? { alwaysRender } : {})}
               onLoad={handleListLoad}
-              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-              contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
               maintainScrollAtEnd={
                 citationPositioning ||
                 (restoringThreadPosition && rememberedPosition?.atEnd === false) ||

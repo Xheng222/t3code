@@ -8,6 +8,7 @@ export interface ForkTimelineRowState {
   seenAssistantMessages: Set<string>;
   onPresentationPendingChange: (messageId: string, pending: boolean, textLength: number) => void;
   pendingAssistantMessages: ReadonlySet<string>;
+  presentationPaused: boolean;
   onWorkEntryToggle: (anchorKey: string) => void;
   workGroupViewState: ForkWorkGroupViewState;
 }

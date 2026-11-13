@@ -2511,7 +2511,7 @@ function timelineRowIsOwnUserMessage(
   );
 }
 
-function messageIsSteer(message: ChatMessage): boolean {
+export function messageIsSteer(message: ChatMessage): boolean {
   return message.inputIntent === "steer" || message.inputIntent === "promoted_queued_to_steer";
 }
 

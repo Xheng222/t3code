@@ -41,6 +41,18 @@ function textIsPresented(text: string, presented: number | undefined) {
   return presented !== undefined && presented >= text.length;
 }
 
+export function holdTurnContent(
+  entries: ReadonlyArray<TimelineEntry>,
+  held: ReadonlyArray<TimelineEntry>,
+) {
+  const previous = new Map(held.map((entry) => [entry.id, entry]));
+  return entries.flatMap((entry) => {
+    if (!isProcessContent(entry)) return [entry];
+    const existing = previous.get(entry.id);
+    return existing ? [existing] : [];
+  });
+}
+
 export function admitTurnContent(
   entries: ReadonlyArray<TimelineEntry>,
   completed: ReadonlyMap<string, number>,
@@ -80,10 +92,11 @@ export function admitTurnContent(
 
 export function useTurnPresentation({
   identity,
-  entries,
+  entries: source,
   latestRunId,
   isWorking,
   immediate: immediateInput,
+  paused = false,
   synced = true,
 }: {
   identity: string;
@@ -91,20 +104,24 @@ export function useTurnPresentation({
   latestRunId: RunId | null;
   isWorking: boolean;
   immediate: boolean;
+  paused?: boolean;
   /** False while the entries are a copy held from before the thread's detail synced. */
   synced?: boolean;
 }) {
-  const hydrated = synced && entries.length > 0;
+  const [held, setHeld] = useState({ identity, entries: source });
+  if (held.identity !== identity || (!paused && held.entries !== source))
+    setHeld({ identity, entries: source });
+  const hydrated = synced && source.length > 0;
   const createVisit = () => ({
     identity,
     hydrated,
     seen: new Set<string>(
-      entries.flatMap((entry) =>
+      source.flatMap((entry) =>
         entry.kind === "message" && entry.message.role === "assistant" ? [entry.message.id] : [],
       ),
     ),
     completed: new Map<string, number>(
-      entries.flatMap((entry) =>
+      source.flatMap((entry) =>
         entry.kind === "message" && entry.message.role === "assistant"
           ? [[entry.message.id, entry.message.text.length] as const]
           : [],
@@ -120,7 +137,7 @@ export function useTurnPresentation({
     visit.identity !== identity ||
     (!visit.hydrated &&
       (hydrated ||
-        entries.some(
+        source.some(
           (entry) =>
             entry.kind === "message" &&
             entry.message.role === "assistant" &&
@@ -131,6 +148,10 @@ export function useTurnPresentation({
     setState(visit);
   }
   const immediate = immediateInput || !visit.hydrated;
+  const entries =
+    paused && held.identity === identity && !immediate
+      ? holdTurnContent(source, held.entries)
+      : source;
   const onPendingChange = useStableCallback(
     (messageId: string, pending: boolean, textLength: number) => {
       setState((current) => {
