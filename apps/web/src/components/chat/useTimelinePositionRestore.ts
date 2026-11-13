@@ -17,6 +17,7 @@ export function settleListScroll(
   list: Pick<LegendListRef, "getScrollableNode" | "scrollToOffset">,
   target: (element: HTMLElement) => number | undefined,
   isCancelled: () => boolean,
+  animated = false,
 ): Promise<void> {
   return new Promise((resolve) => {
     let stableFrames = 0;
@@ -29,7 +30,7 @@ export function settleListScroll(
       if (!element || offset === undefined || frames > SETTLE_MAX_FRAMES) return resolve();
       if (Math.abs(element.scrollTop - offset) > 1) {
         stableFrames = 0;
-        void list.scrollToOffset({ offset, animated: false }).then(() => {
+        void list.scrollToOffset({ offset, animated }).then(() => {
           requestAnimationFrame(reconcile);
         });
         return;

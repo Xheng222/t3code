@@ -48,6 +48,7 @@ export const V2SubagentGroup = memo(function V2SubagentGroup({
     items: agents,
     getId: (agent) => agent.item.id,
     immediate: !current || expanded || forkCtx.activityImmediate,
+    paused: forkCtx.presentationPaused,
   });
   const header =
     current && latest
