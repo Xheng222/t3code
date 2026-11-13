@@ -59,6 +59,7 @@ import {
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as TurnPresentationDelay from "./TurnPresentationDelay.fork.ts";
 import { userFacingDatabaseErrorMessage } from "./UserFacingErrors.ts";
 
 export interface ProviderEventRoutingState {
@@ -719,6 +720,7 @@ export const layer: Layer.Layer<
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
     const turnAnalytics = yield* ProviderUsageAnalytics.ProviderTurnAnalytics;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+    const presentationDelay = yield* TurnPresentationDelay.TurnPresentationDelay;
 
     const writeFinalRunEvents = Effect.fn("RunExecutionService.writeFinalRunEvents")(
       function* (input: {
@@ -845,6 +847,13 @@ export const layer: Layer.Layer<
         const checkpointCaptureCommandId = CommandId.make(
           `command:effect:checkpoint.capture:${input.run.id}`,
         );
+        const presentationDelayMs =
+          input.terminal.status === "completed"
+            ? yield* presentationDelay.forCompletedRun({
+                threadId: input.run.threadId,
+                runId: input.run.id,
+              })
+            : 0;
         // Stopped runs capture rollback points for the next message; enqueue before later starts on this effect lane.
         const finalization = {
           effects:
@@ -861,6 +870,13 @@ export const layer: Layer.Layer<
                       runId: input.run.id,
                       scopeId: input.checkpointScope.id,
                     },
+                    ...(presentationDelayMs > 0
+                      ? {
+                          availableAt: DateTime.add(completedAt, {
+                            milliseconds: presentationDelayMs,
+                          }),
+                        }
+                      : {}),
                   },
                 ]
               : [],
