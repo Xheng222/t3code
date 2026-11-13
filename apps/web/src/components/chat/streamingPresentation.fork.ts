@@ -1,16 +1,4 @@
-export const DEFAULT_STREAMING_SPEED = { normal: 80, maximum: 200 };
-
-function streamingSpeed(current: number, remaining: number, delta: number) {
-  const speeds = DEFAULT_STREAMING_SPEED;
-  const target = Math.min(
-    speeds.maximum,
-    speeds.normal + Math.max(0, remaining - speeds.normal) / 2,
-  );
-  return Math.max(
-    speeds.normal,
-    Math.min(speeds.maximum, current + (target - current) * (1 - Math.exp(-delta / 120))),
-  );
-}
+import { STREAMING_SPEED, streamingSpeed } from "@t3tools/shared/streamingPace";
 
 export function createStreamingPresentation(initialText: string, initiallyVisible: boolean) {
   const listeners = new Set<() => void>();
@@ -20,7 +8,7 @@ export function createStreamingPresentation(initialText: string, initiallyVisibl
   let received = 0;
   let lastGrapheme = 0;
   let visible = 0;
-  let speed = DEFAULT_STREAMING_SPEED.normal;
+  let speed = STREAMING_SPEED.normal;
   let frame: number | undefined;
   let lastFrame = 0;
   let lastPublish = -Infinity;
@@ -64,7 +52,7 @@ export function createStreamingPresentation(initialText: string, initiallyVisibl
       publish();
     }
     if (visible < received) frame = requestAnimationFrame(tick);
-    else speed = DEFAULT_STREAMING_SPEED.normal;
+    else speed = STREAMING_SPEED.normal;
   }
 
   readText(initialText);
@@ -91,7 +79,7 @@ export function createStreamingPresentation(initialText: string, initiallyVisibl
       if (immediate || !appended) {
         visible = received;
         cancel();
-        speed = DEFAULT_STREAMING_SPEED.normal;
+        speed = STREAMING_SPEED.normal;
       }
       publish();
       if (visible < received && frame === undefined) {
