@@ -455,7 +455,7 @@ function GuestThread({
     composerTimelineInset: 0,
     routeThreadKey: threadKey,
     activeThreadKey: threadKey,
-    // Not a server thread: new turns follow the end instead of anchoring near the top.
+    // Guest sends are positioned by the pending-message footer.
     isServerThread: false,
     serverProjection: null,
     threadStatus: "live",
@@ -507,6 +507,7 @@ function GuestThread({
             anchorMessageId={null}
             onAnchorReady={ignore}
             onAnchorSizeChanged={ignore}
+            presentationPaused={follow.presentationPaused}
             contentInsetEndAdjustment={0}
             emptyPlaceholderInset={0}
             liveFollowEnabled={follow.timelineLiveFollowEnabled}

@@ -1,6 +1,5 @@
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { type MessageId, type RunId } from "@t3tools/contracts";
-import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { Debouncer } from "@tanstack/react-pacer";
 import {
   type SetStateAction,
@@ -28,17 +27,16 @@ import {
   type TimelineNavigation,
   type TimelineViewport,
 } from "./timelineViewport";
-import { resolveTimelineIsAtEnd, type MessagesTimelineRow } from "./MessagesTimeline.logic";
+import { resolveTimelineIsAtEnd } from "./MessagesTimeline.logic";
 import { measuredEndOffset, settleListScroll } from "./useTimelinePositionRestore";
-import {
-  releaseChatTimelineAnchor,
-  shouldReleaseTimelineAnchorForToolActivity,
-} from "../ChatView.logic";
+import { releaseChatTimelineAnchor } from "../ChatView.logic";
 import type { Dispatch, RefObject } from "react";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import type { deriveThreadActivityRun } from "@t3tools/client-runtime/state/thread-execution";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import type { TimelineEntry } from "../../session-logic";
+
+const ignoreAnchorSizeChange = (_messageId: MessageId, _size: number) => {};
 
 interface TimelineAnchor {
   readonly threadKey: string | null;
@@ -67,29 +65,20 @@ function createVisitScrollState(
     // initialScrollAtEnd is settling; hiding is always immediate.
     showScrollDebouncer: new Debouncer(() => showScrollToBottom(visit), { wait: 150 }),
     positionedAnchor: null as MessageId | null,
-    settledAnchor: null as MessageId | null,
+    generation: 0,
+    positioning: false,
     resumeOnScroll: false,
     releaseAnchorScrollHold: null as (() => void) | null,
-    pendingAnchorScrollRestore: null as {
-      readonly messageId: MessageId;
-      readonly offset: number;
-    } | null,
-    anchorScrollRestoreFrame: null as number | null,
   };
 }
 type VisitScrollState = ReturnType<typeof createVisitScrollState>;
 
 function stopAnchorPositioning(scroll: VisitScrollState) {
   scroll.positionedAnchor = null;
-  scroll.settledAnchor = null;
+  scroll.generation += 1;
+  scroll.positioning = false;
   scroll.releaseAnchorScrollHold?.();
   scroll.releaseAnchorScrollHold = null;
-}
-
-/** Whether the list still shows the anchored message; a thread switch replaces its data. */
-function listShowsMessage(list: LegendListRef | null, messageId: MessageId): boolean {
-  const rows = list?.getState().data as ReadonlyArray<MessagesTimelineRow> | undefined;
-  return rows?.some((row) => row.kind === "message" && row.message.id === messageId) === true;
 }
 
 /**
@@ -159,8 +148,8 @@ interface TimelineFollowInput {
 }
 
 /**
- * Keeps the timeline following the live end, anchoring a newly sent turn near
- * the top, and letting the user scroll away. Follow lives in a store the
+ * Keeps the timeline following the live end, positioning a newly sent turn,
+ * and letting the user scroll away. Follow lives in a store the
  * viewport's navigation signal writes, so a scroll gesture does not re-render
  * ChatView unless the follow mode flips.
  */
@@ -174,8 +163,6 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     serverProjection,
     threadStatus,
     activeActivityRun,
-    activeRunningTurnId,
-    timelineEntries,
     timelineAnchorMessageId,
     setTimelineAnchor,
   } = input;
@@ -211,6 +198,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   const readFollow = () => followStore.read(visit);
   // Async settles outlive their render; this reads the visit shown now.
   const readCurrentFollow = useStableCallback(readFollow);
+  const readCurrentVisit = useStableCallback(() => visit);
   const isTimelineAtLogicalEnd = () => {
     const current = readFollow();
     return (
@@ -233,6 +221,8 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   // The anchor whose list position LegendList reported ready; until then a
   // newly started run must not re-anchor.
   const [laidOutAnchor, setLaidOutAnchor] = useState<MessageId | null>(null);
+  const [positioningVisit, setPositioningVisit] = useState<TimelineFollowVisit | null>(null);
+  const presentationPaused = timelineAnchorMessageId !== null || positioningVisit === visit;
   const anchorPending =
     timelineAnchorMessageId !== null && laidOutAnchor !== timelineAnchorMessageId;
   const viewportRef = useRef<TimelineViewport | null>(null);
@@ -241,11 +231,8 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     if (before.mode === "following") viewportRef.current?.followReleased();
     const scroll = visitScroll();
     stopAnchorPositioning(scroll);
-    scroll.pendingAnchorScrollRestore = null;
-    if (scroll.anchorScrollRestoreFrame !== null) {
-      cancelAnimationFrame(scroll.anchorScrollRestoreFrame);
-      scroll.anchorScrollRestoreFrame = null;
-    }
+    setPositioningVisit(null);
+    setTimelineAnchor(releaseChatTimelineAnchor);
     if (before.mode === "following") {
       const list = legendListRef.current;
       list?.cancelScroll();
@@ -258,8 +245,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     }
   };
 
-  // A run that starts while the live end is followed anchors its user message
-  // near the top, unless the previous anchor has not been laid out yet.
+  // A newly dispatched run positions the end unless a send is already positioning it.
   const [observedRun, setObservedRun] = useState<TimelineRunObservation | null>(null);
   const dispatchedUserItem =
     observedRun?.hydrated &&
@@ -277,6 +263,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     queued: activeActivityRun?.status === "queued",
     messageId:
       dispatchedUserItem?.item.type === "user_message" ? dispatchedUserItem.item.messageId : null,
+    positionedMessageId: laidOutAnchor,
   });
   if (!sameRunObservation(runObservation.observation, observedRun)) {
     setObservedRun(runObservation.observation);
@@ -319,23 +306,40 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     followStore.dispatch(visit, { type: "followEnd" });
     visitScroll().showScrollDebouncer.cancel();
     setShowScrollToBottom(false);
-    setTimelineAnchor(releaseChatTimelineAnchor);
-    // The anchored end space must be gone before the scroll measures, or the
-    // list lands short of the real end.
+    const scroll = visitScroll();
+    stopAnchorPositioning(scroll);
+    const generation = scroll.generation;
+    scroll.positioning = true;
+    setPositioningVisit(visit);
+    const releaseHold = viewportRef.current?.holdProgrammaticScroll() ?? (() => {});
+    scroll.releaseAnchorScrollHold = releaseHold;
+    const cancelled = () =>
+      scroll.generation !== generation ||
+      readCurrentVisit() !== visit ||
+      visitScrollRef.current !== scroll ||
+      readCurrentFollow().mode !== "following";
     requestAnimationFrame(() => {
       const list = legendListRef.current;
-      if (!list) return;
-      void Promise.resolve(
-        list.scrollToEnd?.({
-          animated: animated && !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-        }),
-      ).then(() =>
-        settleListScroll(
-          list,
-          measuredEndOffset,
-          () => readCurrentFollow().mode !== "following" || legendListRef.current !== list,
-        ),
-      );
+      if (!list || cancelled()) {
+        releaseHold();
+        if (!cancelled()) {
+          scroll.positioning = false;
+          setPositioningVisit(null);
+          setTimelineAnchor(releaseChatTimelineAnchor);
+        }
+        return;
+      }
+      const animate = animated && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      void list.scrollToEnd({ animated: animate }).then(async () => {
+        if (cancelled()) return;
+        await settleListScroll(list, measuredEndOffset, cancelled, animate);
+        if (cancelled()) return;
+        scroll.positioning = false;
+        scroll.releaseAnchorScrollHold = null;
+        releaseHold();
+        setTimelineAnchor(releaseChatTimelineAnchor);
+        setPositioningVisit(null);
+      });
     });
   };
   const scrollToEndStable = useStableCallback(scrollToEnd);
@@ -365,7 +369,8 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     if (
       viewportRef.current !== viewport ||
       readFollow().mode !== "following" ||
-      timelineAnchorMessageId !== null
+      timelineAnchorMessageId !== null ||
+      visitScroll().positioning
     )
       return;
     const node = viewport.scrollNode;
@@ -415,99 +420,21 @@ export function useTimelineFollow(input: TimelineFollowInput) {
       if (pageScrollControllerRef.current === controller) pageScrollControllerRef.current = null;
       if (viewportRef.current === viewport) viewportRef.current = null;
       const scroll = visitScrollRef.current;
-      scroll?.releaseAnchorScrollHold?.();
-      if (scroll) scroll.releaseAnchorScrollHold = null;
+      if (scroll) stopAnchorPositioning(scroll);
     };
   };
 
-  const onTimelineAnchorReady = (messageId: MessageId, anchorIndex: number) => {
+  const onTimelineAnchorReady = (messageId: MessageId) => {
     setLaidOutAnchor(messageId);
+    if (readFollow().mode !== "following" || timelineAnchorMessageId !== messageId) return;
     const scroll = visitScroll();
-    if (scroll.positionedAnchor === messageId) {
-      return;
-    }
-    stopAnchorPositioning(scroll);
+    if (scroll.positionedAnchor === messageId || scroll.positioning) return;
+    scrollToEndStable(true);
     scroll.positionedAnchor = messageId;
-    // The positioning scroll moves up when the anchor sits above the view.
-    const releaseHold = viewportRef.current?.holdProgrammaticScroll() ?? (() => {});
-    scroll.releaseAnchorScrollHold = releaseHold;
-    const isPositioning = () =>
-      scroll.positionedAnchor === messageId && listShowsMessage(legendListRef.current, messageId);
-    // Releasing is idempotent, so an attempt that is no longer current (the
-    // thread switched, the user navigated) always lets go of its own hold.
-    const abandon = () => {
-      releaseHold();
-      if (scroll.positionedAnchor === messageId) stopAnchorPositioning(scroll);
-    };
-    const positionAnchor = (remainingAttempts: number) => {
-      requestAnimationFrame(() => {
-        if (!isPositioning()) {
-          abandon();
-          return;
-        }
-        const list = legendListRef.current;
-        if (!list) {
-          if (remainingAttempts > 0) {
-            positionAnchor(remainingAttempts - 1);
-          } else {
-            abandon();
-          }
-          return;
-        }
-        // LegendList waits for queued layout and the animation before resolving.
-        void list
-          .scrollToIndex({
-            index: anchorIndex,
-            animated: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-            viewPosition: 0,
-            viewOffset: CHAT_LIST_ANCHOR_OFFSET,
-          })
-          .then(() => {
-            if (legendListRef.current === list && isPositioning()) {
-              scroll.settledAnchor = messageId;
-              releaseHold();
-              scroll.releaseAnchorScrollHold = null;
-            } else {
-              abandon();
-            }
-          });
-      });
-    };
-    requestAnimationFrame(() => positionAnchor(12));
   };
   const onTimelineAnchorReadyStable = useStableCallback(onTimelineAnchorReady);
-  const onTimelineAnchorSizeChanged = (messageId: MessageId) => {
-    const scroll = visitScroll();
-    if (scroll.settledAnchor !== messageId || readFollow().mode === "following") {
-      return;
-    }
-    const scrollOffset = legendListRef.current?.getState().scroll;
-    if (scrollOffset === undefined) {
-      return;
-    }
-    if (scroll.pendingAnchorScrollRestore === null) {
-      scroll.pendingAnchorScrollRestore = { messageId, offset: scrollOffset };
-    }
-    if (scroll.anchorScrollRestoreFrame !== null) {
-      return;
-    }
-    scroll.anchorScrollRestoreFrame = requestAnimationFrame(() => {
-      scroll.anchorScrollRestoreFrame = null;
-      const pending = scroll.pendingAnchorScrollRestore;
-      scroll.pendingAnchorScrollRestore = null;
-      if (pending && scroll.settledAnchor === pending.messageId) {
-        const list = legendListRef.current;
-        const currentScrollOffset = list?.getState().scroll;
-        if (
-          typeof currentScrollOffset === "number" &&
-          Math.abs(currentScrollOffset - pending.offset) <= 2
-        ) {
-          void list?.scrollToOffset({ offset: pending.offset, animated: false });
-        }
-      }
-    });
-  };
-  const onTimelineAnchorSizeChangedStable = useStableCallback(onTimelineAnchorSizeChanged);
+  // The timeline leaves no anchored end space, so it never reports one's size.
+  const onTimelineAnchorSizeChangedStable = ignoreAnchorSizeChange;
 
   // The list ignores footer layout, so a new queued turn or status line there would land
   // under the composer. Follow it when the reader was following the end.
@@ -529,7 +456,8 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     );
     if (after === before) return;
     if (isAtEnd) {
-      if (after.mode === "following") setTimelineAnchor(releaseChatTimelineAnchor);
+      if (after.mode === "following" && !scroll.positioning)
+        setTimelineAnchor(releaseChatTimelineAnchor);
       scroll.showScrollDebouncer.cancel();
       setShowScrollToBottom(false);
     } else {
@@ -538,42 +466,10 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   };
   const onIsAtEndChangeStable = useStableCallback(onIsAtEndChange);
 
-  // timelineEntries leave out reasoning rows (their text is not in the
-  // structure), and reasoning counts as tool activity, like any work row.
-  const runningTurnHasReasoning =
-    activeRunningTurnId !== null &&
-    serverProjection?.visibleTurnItems.some(
-      (row) => row.item.type === "reasoning" && row.item.runId === activeRunningTurnId,
-    ) === true;
-  // Z: the release scrolls, and that scroll must follow the commit that drops
-  // the anchored end space; the trigger is streamed thread data. A
-  // totalSize listener cannot replace it: the anchored end space can already
-  // be 0, so dropping it changes no size and no list event fires.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the timeline to the end after the commit that drops anchored end space
-  useLayoutEffect(() => {
-    if (timelineAnchorMessageId === null || !timelineLiveFollowEnabled) return;
-    if (
-      runningTurnHasReasoning ||
-      shouldReleaseTimelineAnchorForToolActivity({
-        anchorMessageId: timelineAnchorMessageId,
-        liveFollowEnabled: timelineLiveFollowEnabled,
-        runningTurnId: activeRunningTurnId,
-        timelineEntries,
-      })
-    ) {
-      scrollToEndStable();
-    }
-  }, [
-    activeRunningTurnId,
-    runningTurnHasReasoning,
-    scrollToEndStable,
-    timelineAnchorMessageId,
-    timelineEntries,
-    timelineLiveFollowEnabled,
-  ]);
-
   /** Arms the anchor for a message the user just sent, before its run exists. */
   const anchorNewTurn = (threadKey: string, messageId: MessageId) => {
+    stopAnchorPositioning(visitScroll());
+    setPositioningVisit(null);
     followStore.dispatch(visit, { type: "followEnd" });
     visitScroll().showScrollDebouncer.cancel();
     setShowScrollToBottom(false);
@@ -583,6 +479,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   return {
     showScrollToBottom,
     timelineLiveFollowEnabled,
+    presentationPaused,
     onComposerPageScrollKeyDownStable,
     onComposerPageScrollKeyUpStable,
     onComposerPageScrollReleaseStable,

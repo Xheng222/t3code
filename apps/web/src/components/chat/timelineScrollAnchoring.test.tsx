@@ -47,6 +47,13 @@ describe("observeTimelineRun", () => {
     const ready = observeTimelineRun(waiting.observation, next);
     expect(ready.anchorMessageId).toBe(next.messageId);
     expect(observeTimelineRun(ready.observation, next).anchorMessageId).toBeNull();
+    const positioned = observeTimelineRun(waiting.observation, {
+      ...next,
+      positionedMessageId: next.messageId,
+    });
+    expect(positioned.anchorMessageId).toBeNull();
+    expect(positioned.observation.runId).toBe(next.runId);
+    expect(observeTimelineRun(positioned.observation, next).anchorMessageId).toBeNull();
   });
 
   it("does not reset the baseline during a temporary loss of projection data", () => {

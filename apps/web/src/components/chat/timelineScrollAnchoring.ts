@@ -11,6 +11,7 @@ export function observeTimelineRun(
   input: TimelineRunObservation & {
     readonly queued: boolean;
     readonly messageId: MessageId | null;
+    readonly positionedMessageId?: MessageId | null;
   },
 ): { observation: TimelineRunObservation; anchorMessageId: MessageId | null } {
   const observation = {
@@ -30,7 +31,10 @@ export function observeTimelineRun(
   ) {
     return { observation: previous, anchorMessageId: null };
   }
-  return { observation, anchorMessageId: input.messageId };
+  return {
+    observation,
+    anchorMessageId: input.messageId === input.positionedMessageId ? null : input.messageId,
+  };
 }
 import type { RunAttemptId } from "@t3tools/contracts";
 import type { ForkWorkGroupViewState } from "./timelineRowContext.fork";
