@@ -28,13 +28,14 @@ export function useForkAssistantText(
         forkCtx.pendingAssistantMessages.has(row.message.id) ||
         heldText !== incomingText),
   );
-  if (!settling && heldText !== incomingText) setHeldText(incomingText);
-  const text = settling ? heldText : incomingText;
+  const paused = forkCtx.presentationPaused || settling;
+  if (!paused && heldText !== incomingText) setHeldText(incomingText);
+  const text = paused ? heldText : incomingText;
   return {
     text,
     streamingProps: {
       messageId: row.message.id,
-      paused: settling,
+      paused,
       seenMessages: forkCtx.seenAssistantMessages,
       animateInitial:
         !forkCtx.seenAssistantMessages.has(row.message.id) &&

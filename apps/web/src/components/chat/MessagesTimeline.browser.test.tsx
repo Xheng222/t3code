@@ -406,6 +406,46 @@ describe("MessagesTimeline work rows", () => {
         await vi.waitFor(() => expect(viewport.scrollHeight).toBeGreaterThan(height + 500));
       }
     }
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        timelineEntries={entries}
+        presentationPaused
+        latestRun={{
+          runId,
+          status: "completed",
+          startedAt: CREATED_AT,
+          completedAt: CREATED_AT,
+          turnEnded: true,
+        }}
+      />,
+    );
+    expect(screen.container.querySelector('[data-timeline-row-kind="work-waiting"]')).toBeNull();
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        timelineEntries={[...entries, message("Next prompt", {}, "next-prompt")]}
+        presentationPaused
+        anchorMessageId={MessageId.make("next-prompt")}
+        latestRun={{
+          runId,
+          status: "completed",
+          startedAt: CREATED_AT,
+          completedAt: CREATED_AT,
+          turnEnded: true,
+        }}
+      />,
+    );
+    expect(
+      screen.container.querySelector('[data-timeline-motion-row="entry-progress"]'),
+    ).toBeNull();
+    expect(screen.container.querySelectorAll('[data-timeline-row-kind="working"]')).toHaveLength(1);
+    expect(
+      screen.container
+        .querySelector('[data-timeline-row-kind="working"]')
+        ?.closest("[data-timeline-motion-row]")
+        ?.getAttribute("data-timeline-motion-row"),
+    ).toBe("turn-status:entry-next-prompt");
   });
 
   it("preserves reading position when a live turn grows after work is expanded", async () => {
@@ -778,8 +818,9 @@ describe("MessagesTimeline messages", () => {
   it("disables the minimap's next turn button at the bottom of the thread", async () => {
     setup();
     const props = baseProps();
+    // Steers continue one turn past a screen, so it leaves no end gap.
     const entries = Array.from({ length: 16 }, (_, index) => [
-      message(`Question ${index}`, {}, `user-${index}`),
+      message(`Question ${index}`, index > 0 ? { inputIntent: "steer" } : {}, `user-${index}`),
       message(`Answer ${index}`, { role: "assistant" }, `assistant-${index}`),
     ]).flat();
     await using screen = await renderTimeline(entries, props);
