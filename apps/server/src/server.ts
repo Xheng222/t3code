@@ -29,6 +29,9 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as TurnPresentationDelay from "./orchestration-v2/TurnPresentationDelay.fork.ts";
+import * as TurnSnapshots from "./orchestration-v2/TurnSnapshots.fork.ts";
+import * as ThreadCommandExecutor from "./orchestration-v2/ThreadCommandExecutor.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as KeepAwake from "./background/KeepAwake.ts";
@@ -698,6 +701,16 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  TurnSnapshots.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        RuntimeLayer.layerEventSink,
+        ProjectionStoreV2.layer,
+        IdAllocator.layer,
+        ThreadCommandExecutor.layer,
+      ),
+    ),
+  ),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
     Layer.provide(layerServerRestart),

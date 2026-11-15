@@ -2266,6 +2266,42 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       },
     ),
+
+    deleteAllCheckpointRefs: Effect.fn("GitVcsDriver.checkpoints.deleteAllCheckpointRefs")(
+      function* (cwd) {
+        const operation = "GitVcsDriver.checkpoints.deleteAllCheckpointRefs";
+        const listed = yield* execute({
+          operation,
+          cwd,
+          args: [
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/t3/orchestration-v2/checkpoints/",
+            "refs/t3/checkpoints/",
+          ],
+          timeoutMs: 60_000,
+          maxOutputBytes: 64 * 1024 * 1024,
+          outputMode: "error",
+        });
+        const refs = listed.stdout.split("\n").filter((ref) => ref !== "");
+        if (refs.length > 0) {
+          // --no-deref deletes a symbolic ref itself, never the branch it points to.
+          yield* execute({
+            operation,
+            cwd,
+            args: ["update-ref", "--no-deref", "--stdin"],
+            stdin: refs.map((ref) => `delete ${ref}\n`).join(""),
+            timeoutMs: 120_000,
+          });
+        }
+        // Capture writes the same ref into each submodule's own repository.
+        let deleted = refs.length;
+        for (const submodule of yield* listSubmodules(cwd).pipe(Effect.orElseSucceed(() => []))) {
+          deleted += yield* checkpoints.deleteAllCheckpointRefs(submodule);
+        }
+        return deleted;
+      },
+    ),
   };
 
   return {

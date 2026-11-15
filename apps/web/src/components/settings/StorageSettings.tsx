@@ -1,7 +1,8 @@
-import type {
-  StorageCleanupReport,
-  StorageCleanupSettings,
-  WorktreeCleanupRules,
+import {
+  DEFAULT_UNIFIED_SETTINGS,
+  type StorageCleanupReport,
+  type StorageCleanupSettings,
+  type WorktreeCleanupRules,
 } from "@t3tools/contracts";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
@@ -19,6 +20,15 @@ import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useDebouncedValue } from "../../state/queries";
 import { AnimatedHeight } from "../AnimatedHeight";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
@@ -33,6 +43,7 @@ import {
   NumberFieldInput,
 } from "../ui/number-field";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
+import { ScopedSwitch } from "./ScopedSwitch";
 import { DatabaseStorageNotice } from "./DatabaseStorageNotice";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -514,6 +525,127 @@ function CleanupSection() {
   );
 }
 
+const turnSnapshotDeletePermissionsAtom = environmentAtomList(
+  "web-turn-snapshot-delete-permissions",
+  serverEnvironment.deleteTurnSnapshots.permissionAtom,
+);
+
+function TurnSnapshotsSection() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const { connectedEnvironments } = useSettingsScope();
+  const permissions = useAtomValue(
+    turnSnapshotDeletePermissionsAtom(
+      environmentIdsKey(connectedEnvironments.map(({ environmentId }) => environmentId)),
+    ),
+  );
+  const allowed = connectedEnvironments.filter((_, index) => permissions[index] === true);
+  const run = useAtomCommand(serverEnvironment.deleteTurnSnapshots);
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+
+  const deleteAll = async () => {
+    setConfirming(false);
+    setPending(true);
+    const deleted = await Promise.all(
+      allowed.map(async (environment) => {
+        const result = await run({ environmentId: environment.environmentId, input: {} });
+        if (result._tag === "Success") {
+          const [failure] = result.value.failures;
+          if (failure !== undefined) {
+            toastManager.add({
+              type: "error",
+              title: `Some turn snapshots on ${environment.label} weren't deleted`,
+              description: `${failure.path}: ${failure.reason}`,
+            });
+          }
+          return result.value.refsDeleted;
+        }
+        if (!isAtomCommandInterrupted(result)) {
+          toastManager.add({
+            type: "error",
+            title: `Could not delete turn snapshots on ${environment.label}`,
+            description: String(squashAtomCommandFailure(result)),
+          });
+        }
+        return null;
+      }),
+    ).finally(() => setPending(false));
+    const succeeded = deleted.filter((count) => count !== null);
+    if (succeeded.length === 0) return;
+    const total = succeeded.reduce((sum, count) => sum + count, 0);
+    toastManager.add({
+      type: "success",
+      title: "Turn snapshots deleted",
+      description: `Removed ${total.toLocaleString()} ${total === 1 ? "snapshot" : "snapshots"}.`,
+    });
+  };
+
+  return (
+    <SettingsSection id="storage-turn-snapshots" title="Turn snapshots">
+      <SettingsRow
+        serverScoped
+        settingKeys={["recordTurnSnapshots"]}
+        {...searchableSetting("storage-turn-snapshots-record")}
+        description="Save a hidden Git snapshot in the project's repository after each turn. Snapshots power changed-file lists, turn diffs and reverting files. When off, new turns have none of these."
+        resetAction={
+          settings.recordTurnSnapshots !== DEFAULT_UNIFIED_SETTINGS.recordTurnSnapshots ? (
+            <SettingResetButton
+              label="record turn snapshots"
+              onClick={() =>
+                updateSettings({
+                  recordTurnSnapshots: DEFAULT_UNIFIED_SETTINGS.recordTurnSnapshots,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <ScopedSwitch
+            settingKeys={["recordTurnSnapshots"]}
+            checked={settings.recordTurnSnapshots}
+            onCheckedChange={(checked) => updateSettings({ recordTurnSnapshots: Boolean(checked) })}
+            aria-label="Record turn snapshots"
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("storage-turn-snapshots-delete")}
+        description="Remove the snapshots saved so far from every project's repository."
+        control={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={pending || allowed.length === 0}
+              onClick={() => setConfirming(true)}
+            >
+              {pending ? "Deleting…" : "Delete…"}
+            </Button>
+            <AlertDialog open={confirming} onOpenChange={setConfirming}>
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete turn snapshots?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Earlier turns lose their changed-file list, turn diff and file revert. Reverting
+                    the conversation still works. This can't be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                  <Button variant="destructive" onClick={() => void deleteAll()}>
+                    Delete snapshots
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
+          </>
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function supportsStorageCleanup(
   environments: ReadonlyArray<{
     readonly serverConfig: {
@@ -887,6 +1019,7 @@ export function StorageCleanupSections() {
         </AnimatedHeight>
       </SettingsSection>
       <CleanupSection />
+      <TurnSnapshotsSection />
     </>
   );
 }
