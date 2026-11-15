@@ -27,6 +27,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -43,6 +44,7 @@ import * as WorkspaceFolders from "../workspace/WorkspaceFolders.ts";
 const layerProjectionStoreTest = Layer.mergeAll(
   ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
   SqlitePersistence.layerMemory,
+  ServerSettings.layerTest(),
 );
 
 const layerNoTrackedFolders = Layer.merge(
@@ -67,6 +69,11 @@ const modelSelection = {
   instanceId: providerInstanceId,
   model: "gpt-5.4",
 } as const;
+
+const runsWithoutSnapshots = [
+  { name: "side chat", sideChat: true, recordTurnSnapshots: true },
+  { name: "snapshots off", sideChat: false, recordTurnSnapshots: false },
+];
 
 it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
   it.effect.each([false, true])(
@@ -959,22 +966,24 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
     }),
   );
 
-  it.effect("completes a side chat run with a missing checkpoint and never touches git", () =>
+  it.effect.each(runsWithoutSnapshots)("completes a $name run without touching git", (row) =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
-      const sideChatThreadId = ThreadId.make("thread:checkpoint-capture-side-chat");
-      const sideChatRunId = RunId.make("run:checkpoint-capture-side-chat");
-      const sideChatScopeId = CheckpointScopeId.make("scope:checkpoint-capture-side-chat");
-      const sideChatRootNodeId = NodeId.make("node:checkpoint-capture-side-chat-root");
+      const { name, sideChat, recordTurnSnapshots } = row;
+      const key = name.replace(" ", "-");
+      const sideChatThreadId = ThreadId.make(`thread:checkpoint-capture-${key}`);
+      const sideChatRunId = RunId.make(`run:checkpoint-capture-${key}`);
+      const sideChatScopeId = CheckpointScopeId.make(`scope:checkpoint-capture-${key}`);
+      const sideChatRootNodeId = NodeId.make(`node:checkpoint-capture-${key}-root`);
       const sideChatProviderThreadId = ProviderThreadId.make(
-        "provider-thread:checkpoint-capture-side-chat",
+        `provider-thread:checkpoint-capture-${key}`,
       );
       const event = { threadId: sideChatThreadId, occurredAt: now };
       const events: ReadonlyArray<OrchestrationV2DomainEvent> = [
         {
           ...event,
-          id: EventId.make("event:checkpoint-capture-side-chat:thread"),
+          id: EventId.make(`event:checkpoint-capture-${key}:thread`),
           type: "thread.created",
           payload: {
             createdBy: "user",
@@ -989,12 +998,18 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
             branch: null,
             worktreePath: "/repo",
             activeProviderThreadId: null,
-            lineage: {
-              parentThreadId: threadId,
-              relationshipToParent: "fork",
-              rootThreadId: threadId,
-              sideChat: true,
-            },
+            lineage: sideChat
+              ? {
+                  parentThreadId: threadId,
+                  relationshipToParent: "fork",
+                  rootThreadId: threadId,
+                  sideChat: true,
+                }
+              : {
+                  parentThreadId: null,
+                  relationshipToParent: null,
+                  rootThreadId: sideChatThreadId,
+                },
             forkedFrom: null,
             createdAt: now,
             updatedAt: now,
@@ -1007,7 +1022,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         },
         {
           ...event,
-          id: EventId.make("event:checkpoint-capture-side-chat:provider-thread"),
+          id: EventId.make(`event:checkpoint-capture-${key}:provider-thread`),
           type: "provider-thread.updated",
           driver,
           providerInstanceId,
@@ -1031,7 +1046,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         },
         {
           ...event,
-          id: EventId.make("event:checkpoint-capture-side-chat:run"),
+          id: EventId.make(`event:checkpoint-capture-${key}:run`),
           type: "run.updated",
           runId: sideChatRunId,
           payload: {
@@ -1041,7 +1056,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
             providerInstanceId,
             modelSelection,
             providerThreadId: sideChatProviderThreadId,
-            userMessageId: MessageId.make("message:checkpoint-capture-side-chat"),
+            userMessageId: MessageId.make(`message:checkpoint-capture-${key}`),
             rootNodeId: sideChatRootNodeId,
             activeAttemptId: null,
             status: "waiting",
@@ -1054,7 +1069,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         },
         {
           ...event,
-          id: EventId.make("event:checkpoint-capture-side-chat:node"),
+          id: EventId.make(`event:checkpoint-capture-${key}:node`),
           type: "node.updated",
           runId: sideChatRunId,
           nodeId: sideChatRootNodeId,
@@ -1078,7 +1093,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         },
         {
           ...event,
-          id: EventId.make("event:checkpoint-capture-side-chat:scope"),
+          id: EventId.make(`event:checkpoint-capture-${key}:scope`),
           type: "checkpoint-scope.created",
           runId: sideChatRunId,
           nodeId: sideChatRootNodeId,
@@ -1098,7 +1113,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         },
       ];
       yield* Effect.forEach(events, (candidate) => projectionStore.apply(candidate));
-      const gitUnavailable = () => Effect.die("side chats must not snapshot the shared worktree");
+      const gitUnavailable = () => Effect.die(`a ${name} run must not snapshot the worktree`);
       const layerCapture = CheckpointCaptureService.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -1124,6 +1139,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
                   Effect.orDie,
                 ),
             }),
+            ServerSettings.layerTest({ recordTurnSnapshots }),
           ),
         ),
       );
