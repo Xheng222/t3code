@@ -487,6 +487,7 @@ export function layerWithRegistry<Error>(
         layerEventSinkProvided,
         IdAllocator.layer,
         layerStores,
+        layerServerSettings,
       ),
     ),
   );
