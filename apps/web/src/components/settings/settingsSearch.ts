@@ -271,6 +271,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "storage-turn-snapshots-record",
+    title: "Record turn snapshots",
+    to: "/settings/maintenance",
+    scope: "environment-defaults",
+    searchTerms: ["git checkpoints hidden refs changed files turn diffs revert files disk storage"],
+  },
+  {
+    id: "storage-turn-snapshots-delete",
+    title: "Delete turn snapshots",
+    to: "/settings/maintenance",
+    scope: "environment-defaults",
+    searchTerms: ["git checkpoints hidden refs remove clear disk storage cleanup"],
+  },
+  {
     id: "project-defaults",
     title: "Project defaults and overrides",
     to: "/settings/threads",

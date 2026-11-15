@@ -2002,6 +2002,13 @@ it.effect("restores and deletes checkpoints inside populated submodules", () =>
       const ref = yield* git(cwd, ["for-each-ref", "refs/t3"]);
       assert.strictEqual(ref.stdout, "");
     }
+
+    yield* driver.checkpoints.captureCheckpoint({ cwd: root, checkpointRef });
+    assert.strictEqual(yield* driver.checkpoints.deleteAllCheckpointRefs(root), 3);
+    for (const cwd of [root, path.join(root, "library"), path.join(root, "library", "nested")]) {
+      const ref = yield* git(cwd, ["for-each-ref", "refs/t3"]);
+      assert.strictEqual(ref.stdout, "");
+    }
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
