@@ -62,6 +62,7 @@ import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as TurnPresentationDelay from "./TurnPresentationDelay.fork.ts";
+import { recordsTurnSnapshots } from "./TurnSnapshots.fork.ts";
 import { userFacingDatabaseErrorMessage } from "./UserFacingErrors.ts";
 
 export interface ProviderEventRoutingState {
@@ -1109,6 +1110,7 @@ export const layer: Layer.Layer<
     ) {
       // Side chats share the parent's worktree; a snapshot would capture the parent's edits.
       if (input.appThread.lineage.sideChat === true) return;
+      if (!(yield* recordsTurnSnapshots(serverSettings))) return;
       yield* checkpointService
         .captureBaseline({
           scope: input.checkpointScope,
