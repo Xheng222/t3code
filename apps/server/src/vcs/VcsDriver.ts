@@ -117,6 +117,8 @@ export interface VcsCheckpointOps {
   readonly deleteCheckpointRefs: (
     input: VcsDeleteCheckpointRefsInput,
   ) => Effect.Effect<void, VcsError>;
+  /** Deletes every current and legacy checkpoint ref in the repository and returns the count. */
+  readonly deleteAllCheckpointRefs: (cwd: string) => Effect.Effect<number, VcsError>;
 }
 
 export class VcsDriver extends Context.Service<

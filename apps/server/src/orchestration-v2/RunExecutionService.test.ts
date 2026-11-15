@@ -1348,7 +1348,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
   }),
 );
 
-it.effect("prompts the provider only after a forked baseline capture finishes", () =>
+it.effect.each([true, false])("prompts after any forked baseline (snapshots: %s)", (record) =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread:run-execution-forked-baseline");
     const runId = RunId.make("run:run-execution-forked-baseline");
@@ -1377,7 +1377,7 @@ it.effect("prompts the provider only after a forked baseline capture finishes", 
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
-          ServerSettings.layerTest(),
+          ServerSettings.layerTest({ recordTurnSnapshots: record }),
         ),
       ),
     );
@@ -1436,7 +1436,7 @@ it.effect("prompts the provider only after a forked baseline capture finishes", 
       yield* Fiber.join(started);
     }).pipe(Effect.provide(layerTest));
 
-    assert.deepEqual(yield* Ref.get(order), ["baseline", "prompt"]);
+    assert.deepEqual(yield* Ref.get(order), record ? ["baseline", "prompt"] : ["prompt"]);
   }),
 );
 

@@ -3039,6 +3039,19 @@ it.effect("restores and deletes checkpoints inside populated submodules", () =>
       const ref = yield* git(cwd, ["for-each-ref", "refs/t3"]);
       assert.strictEqual(ref.stdout, "");
     }
+
+    yield* driver.checkpoints.captureCheckpoint({ cwd: root, checkpointRef });
+    const indexStore = path.join(
+      (yield* git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim(),
+      "t3-checkpoint-indexes",
+    );
+    assert.isTrue(yield* fileSystem.exists(indexStore));
+    assert.strictEqual(yield* driver.checkpoints.deleteAllCheckpointRefs(root), 3);
+    assert.isFalse(yield* fileSystem.exists(indexStore));
+    for (const cwd of [root, path.join(root, "library"), path.join(root, "library", "nested")]) {
+      const ref = yield* git(cwd, ["for-each-ref", "refs/t3"]);
+      assert.strictEqual(ref.stdout, "");
+    }
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
