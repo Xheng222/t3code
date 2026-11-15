@@ -1331,6 +1331,22 @@ export const StorageCleanupReport = Schema.Struct({
 });
 export type StorageCleanupReport = typeof StorageCleanupReport.Type;
 
+export const TurnSnapshotDeleteResult = Schema.Struct({
+  refsDeleted: Schema.Number,
+  /** Project repositories whose snapshots could not be deleted. */
+  failures: Schema.Array(Schema.Struct({ path: Schema.String, reason: Schema.String })),
+});
+export type TurnSnapshotDeleteResult = typeof TurnSnapshotDeleteResult.Type;
+
+export class TurnSnapshotsError extends Schema.TaggedError<TurnSnapshotsError>()(
+  "TurnSnapshotsError",
+  { reason: Schema.String },
+) {
+  override get message() {
+    return this.reason;
+  }
+}
+
 export const StorageCleanupSettings = Schema.Struct({
   worktreeKeepWhen: WorktreeKeepWhen.pipe(
     Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
@@ -1390,6 +1406,8 @@ export const ServerSettings = Schema.Struct({
   ),
   /** Holds an OS sleep inhibitor while any run is active; closing a laptop lid still sleeps it. */
   keepAwakeWhileAgentsWork: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Off: turns write no Git snapshot, so no changed-file list, turn diff or file revert. */
+  recordTurnSnapshots: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /** New T3 Connect device keys wait for approval from someone already trusted here. */
   requireConnectDeviceApproval: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1858,6 +1876,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
+  recordTurnSnapshots: Schema.optionalKey(Schema.Boolean),
   requireConnectDeviceApproval: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   enablePreviewTunnel: Schema.optionalKey(Schema.Boolean),
