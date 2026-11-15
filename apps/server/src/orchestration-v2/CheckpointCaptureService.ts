@@ -17,10 +17,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { recordsTurnSnapshots } from "./TurnSnapshots.fork.ts";
 
 // Git processes are already capped server-wide; this keeps one thread from taking every slot.
 const REPOSITORY_CAPTURE_CONCURRENCY = 6;
@@ -57,6 +59,7 @@ export const layer: Layer.Layer<
   | EventSink.EventSinkV2
   | IdAllocator.IdAllocatorV2
   | ProjectionStore.ProjectionStoreV2
+  | ServerSettings.ServerSettingsService
 > = Layer.effect(
   CheckpointCaptureServiceV2,
   Effect.gen(function* () {
@@ -64,6 +67,7 @@ export const layer: Layer.Layer<
     const eventSink = yield* EventSink.EventSinkV2;
     const ids = yield* IdAllocator.IdAllocatorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const settings = yield* ServerSettings.ServerSettingsService;
 
     const execute = Effect.fn("orchestrationV2.checkpointCapture.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -106,6 +110,7 @@ export const layer: Layer.Layer<
       }
 
       const capturedAt = yield* DateTime.now;
+      const forceMissing = sideChat || !(yield* recordsTurnSnapshots(settings));
       const baselineOrdinalWithinScope = Math.max(0, run.ordinal - 1);
       const isPreserved = (ordinalWithinScope: number) =>
         preservedCheckpointOrdinals.includes(ordinalWithinScope);
@@ -117,12 +122,12 @@ export const layer: Layer.Layer<
           ordinalWithinScope,
           nodeId: rootNode.id,
           capturedAt: run.requestedAt,
-          forceMissing: sideChat,
+          forceMissing,
         });
       // The tracked Git folders the thread reaches now. One added since the turn began has no
       // baseline, so its first checkpoint lists no files; one removed is simply not captured.
       const repositoryScopes =
-        sideChat || context.thread === undefined
+        forceMissing || context.thread === undefined
           ? []
           : yield* checkpoints.repositoryScopes({ rootScope: scope, ...context.thread });
       const nested =
@@ -147,7 +152,7 @@ export const layer: Layer.Layer<
           ordinalWithinScope: run.ordinal,
           appRunOrdinal: run.ordinal,
           capturedAt,
-          forceMissing: sideChat,
+          forceMissing,
           ...excluded(scope),
         });
         return { threadStartCheckpoint, baselineCheckpoint, checkpoint };

@@ -411,6 +411,8 @@ import {
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
   StorageCleanupReport,
+  TurnSnapshotDeleteResult,
+  TurnSnapshotsError,
   DatabaseReclaimError,
   DatabaseStorageStatus,
   ServerSettings,
@@ -575,6 +577,7 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
+  serverDeleteTurnSnapshots: "server.deleteTurnSnapshots",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverReclaimDatabaseSpace: "server.reclaimDatabaseSpace",
   peerLinksList: "peerLinks.list",
@@ -908,6 +911,12 @@ const WsServerGetStorageCleanupReportRpc = Rpc.make(WS_METHODS.serverGetStorageC
   success: Schema.NullOr(StorageCleanupReport),
   stream: true,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerDeleteTurnSnapshotsRpc = Rpc.make(WS_METHODS.serverDeleteTurnSnapshots, {
+  payload: Schema.Struct({}),
+  success: TurnSnapshotDeleteResult,
+  error: Schema.Union([TurnSnapshotsError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStorage, {
@@ -2413,6 +2422,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
   WsServerGetStorageCleanupReportRpc,
+  WsServerDeleteTurnSnapshotsRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerGetSettingsRpc,
   WsServerReclaimDatabaseSpaceRpc,

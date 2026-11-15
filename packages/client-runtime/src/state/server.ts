@@ -1470,6 +1470,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverRunStorageCleanup,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    deleteTurnSnapshots: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:delete-turn-snapshots",
+      tag: WS_METHODS.serverDeleteTurnSnapshots,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     prepareTriage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:prepare-triage",
       tag: WS_METHODS.serverPrepareTriage,
