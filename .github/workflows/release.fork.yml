@@ -1,0 +1,107 @@
+name: Fork release
+
+on:
+  push:
+    tags:
+      - "v*-nightly.*"
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Windows x64 nightly
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve version
+        shell: bash
+        run: |
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+)$ ]]; then
+            echo "::error::$TAG does not match v<x.y.z>-nightly.<YYYYMMDD>.<n>."
+            exit 1
+          fi
+          echo "T3CODE_DESKTOP_VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      # setup-vp's cache restores a Linux-shaped store on Windows, so cache pnpm's store directly.
+      - name: Resolve package cache path
+        id: package_cache_path
+        shell: bash
+        run: echo "path=$(vp pm cache dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.package_cache_path.outputs.path }}
+          key: fork-release-packages-v1-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install
+        run: vp install
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build resource monitor
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Package
+        shell: bash
+        env:
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true"
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # T3 Connect's public config; a build without it disables T3 Connect.
+          set -a
+          source <(grep -E '^T3CODE_[A-Z_]+=' .env.example)
+          set +a
+          vp run dist:desktop:win --arch x64
+
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          installer="release/T3-Code-${T3CODE_DESKTOP_VERSION}-x64.exe"
+          for file in "$installer" "$installer.blockmap" release/nightly.yml; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error::The build did not produce $file."
+              exit 1
+            fi
+          done
+          gh release create "$TAG" "$installer" "$installer.blockmap" release/nightly.yml \
+            --verify-tag --prerelease --latest=false \
+            --title "T3 Code Nightly $T3CODE_DESKTOP_VERSION" \
+            --notes "Windows x64 nightly built from $GITHUB_SHA."
+          # The updater reads this pointer to find the newest nightly whatever the tag order.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '{tag_name, name, body}' > nightly.json
+          if ! gh release view update-feed > /dev/null 2>&1; then
+            gh release create update-feed --prerelease --latest=false --title "Update feed" \
+              --notes "The desktop updater reads nightly.json here to find the newest nightly. Do not delete it."
+          fi
+          gh release upload update-feed nightly.json --clobber
