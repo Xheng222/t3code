@@ -638,13 +638,44 @@ function toolGroupActionLabel(
   }
 }
 
+function joinNames(names: ReadonlyArray<string>, resolve: MFunctionType): string {
+  if (names.length < 2) return names[0] ?? "";
+  if (names.length === 2) {
+    return resolve(msg("{first} and {second}", { first: names[0]!, second: names[1]! }));
+  }
+  return resolve(
+    msg("{items}, and {last}", { items: names.slice(0, -1).join(", "), last: names.at(-1)! }),
+  );
+}
+
 function joinClauses(items: ReadonlyArray<string>, resolve: MFunctionType): string {
   if (items.length < 2) return items[0] ?? "";
   if (items.length === 2) {
-    return resolve(msg("{first} and {second}", { first: items[0]!, second: items[1]! }));
+    return resolve(
+      msg("{first} and {second}", {
+        first: items[0]!,
+        second: items[1]!,
+        $context: "clauses of an activity summary",
+      }),
+    );
   }
+  const head = items.slice(1, -1).reduce(
+    (joined, item) =>
+      resolve(
+        msg("{first}, {second}", {
+          first: joined,
+          second: item,
+          $context: "clauses of an activity summary",
+        }),
+      ),
+    items[0]!,
+  );
   return resolve(
-    msg("{items}, and {last}", { items: items.slice(0, -1).join(", "), last: items.at(-1)! }),
+    msg("{items}, and {last}", {
+      items: head,
+      last: items.at(-1)!,
+      $context: "clauses of an activity summary",
+    }),
   );
 }
 
@@ -772,7 +803,7 @@ export function summarizeToolGroup(
   if (sources.size > 0) {
     const sourceValues = [...sources.values()];
     const sourceNames = [...new Set(sourceValues.map((source) => source.name))];
-    const names = joinClauses(sourceNames, resolve);
+    const names = joinNames(sourceNames, resolve);
     const allIntegrations = sourceValues.every((source) => source.kind === "integration");
     labels.unshift(
       allIntegrations
