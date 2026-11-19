@@ -1,4 +1,7 @@
 {
+  "3e02681d193dc238": "{first} y {second}",
+  "37639abb2244af1c": "{items} y {last}",
+  "3204b0cf4cbf22bf": "{first}, {second}",
   "b1c59f57e2b5f3e5": "Registrar instantáneas de turnos",
   "138aacaa4a31bfed": "git checkpoints hidden refs changed files turn diffs revert files disk storage",
   "26e6abe7d7d207e5": "Eliminar instantáneas de turnos",
