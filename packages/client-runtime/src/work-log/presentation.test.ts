@@ -3,10 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { compactT3McpToolOutput } from "@t3tools/shared/toolOutput";
+import { decodeOptions, mFallback } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import {
   resolveViewedImageAsset,
   resolveWorkEntryToolPresentation,
+  summarizeToolGroup,
   toolItemForDisplay,
   type WorkLogPresentationEntry,
   workEntryIndicatesToolFailure,
@@ -229,6 +232,34 @@ describe("resolveWorkEntryToolPresentation", () => {
         toolData: { server: "another-server", tool: "preview_click" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("summarizeToolGroup", () => {
+  it("joins every clause with the locale's separator", () => {
+    const resolve = ((encoded: string) => {
+      const options = decodeOptions(encoded);
+      if (options?.$context !== "clauses of an activity summary") return mFallback(encoded);
+      return Object.entries(options)
+        .filter(([key]) => !key.startsWith("$"))
+        .map(([, value]) => value)
+        .join("，");
+    }) as MFunctionType;
+    const entry = (id: string, fields: Partial<WorkLogPresentationEntry>) => ({
+      id,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Tool",
+      tone: "tool" as const,
+      ...fields,
+    });
+    const read = entry("read", { requestKind: "file-read" });
+    const edit = entry("edit", { itemType: "file_change" });
+    const command = entry("command", { itemType: "command_execution", command: "ls" });
+
+    expect(summarizeToolGroup([read, edit], resolve).summary).toBe("Read 1 file，changed 1 file");
+    expect(summarizeToolGroup([read, edit, command], resolve).summary).toBe(
+      "Changed 1 file，ran 1 command，performed 1 other action",
+    );
   });
 });
 
