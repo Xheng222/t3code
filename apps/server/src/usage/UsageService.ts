@@ -1,7 +1,11 @@
 import {
+  isDelegatedAppThread,
   type ProviderInstanceConfig,
   ProviderInstanceId,
+  type ThreadId,
+  type ThreadUsageCost,
   USAGE_CONTRACT_VERSION,
+  UsageDay,
   type ServerSettings as ServerSettingsValue,
   type UsageProviderKind,
   type UsageSource,
@@ -31,6 +35,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
 import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -48,6 +53,7 @@ import {
 } from "./usagePricing.ts";
 import {
   DESKTOP_HOST_SCOPE_ENV,
+  listMatchingTranscriptFiles,
   listTranscriptFiles,
   readDirectoryVolumeId,
   readPhysicalSourceId,
@@ -160,6 +166,9 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    readonly readThreadCost: (
+      threadId: ThreadId,
+    ) => Effect.Effect<ThreadUsageCost, UsageReadError, ThreadManagement.ThreadManagementService>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
 >()("t3/usage/UsageService") {}
@@ -389,12 +398,14 @@ export const make = Effect.gen(function* () {
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
     awaitRefresh: boolean,
+    includesProvider?: (provider: UsageProviderKind) => boolean,
   ) {
     const dirs: Array<TranscriptSource> = [];
     const pending: Array<ScannedDir> = [];
     const seen = new Set<string>();
     for (const { driver, reader } of transcriptReaders) {
       const { provider, format } = reader;
+      if (includesProvider?.(provider) === false) continue;
       const directories = yield* Effect.forEach(
         yield* usageInstances(driver, settings),
         (instance) => reader.directories(instance, { awaitRefresh }),
@@ -699,6 +710,7 @@ export const make = Effect.gen(function* () {
     source: TranscriptSource,
     windowStartMs: number,
     fromMemory: boolean,
+    matchingFiles?: Effect.Effect<Awaited<ReturnType<typeof listMatchingTranscriptFiles>>>,
   ) {
     const { provider, format, dir, volumeId, physicalSourceId, fileName } = source;
     const identity = {
@@ -711,13 +723,20 @@ export const make = Effect.gen(function* () {
       .exists(dir)
       .pipe(Effect.catchCause(() => Effect.succeed(false)));
     if (!exists) {
-      cover(source, windowStartMs);
+      if (!matchingFiles) cover(source, windowStartMs);
       return { ...identity, files: null } satisfies ScannedDir;
     }
     // scanSummary aggregates the saved files, as it does for a deleted directory.
     if (fromMemory) return { ...identity, files: [] } satisfies ScannedDir;
-    const { files, walked, failedPaths } = yield* Effect.promise(() =>
-      listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
+    const { files, walked, failedPaths } = yield* (
+      matchingFiles ??
+        Effect.promise(() =>
+          listTranscriptFiles(
+            dir,
+            windowStartMs,
+            fileName === undefined ? undefined : { fileName },
+          ),
+        )
     );
     const read = yield* Effect.forEach(
       files,
@@ -755,7 +774,7 @@ export const make = Effect.gen(function* () {
       if (!livePaths.has(originalPath) && fileCache.delete(originalPath)) cacheDirty = true;
     }
     const unread = failedPaths + read.filter((file) => file.failed).length;
-    if (unread === 0) cover(source, windowStartMs);
+    if (unread === 0 && !matchingFiles) cover(source, windowStartMs);
     yield* Effect.annotateCurrentSpan({
       "usage.files": files.length,
       "usage.files_parsed": read.filter((file) => file.update !== undefined).length,
@@ -826,6 +845,10 @@ export const make = Effect.gen(function* () {
     input: UsageSummaryInput,
     settings: ServerSettingsValue,
     provisional: boolean,
+    collectScoped?: (
+      windowStartMs: number,
+      retentionCutoffMs: number,
+    ) => Effect.Effect<readonly ScannedDir[]>,
   ) {
     if (input.sinceDay > input.untilDay) {
       return yield* new UsageReadError({
@@ -907,7 +930,12 @@ export const make = Effect.gen(function* () {
       return { scannedDirs: scanned, fromMemory };
     });
     const [{ scannedDirs, fromMemory }] = yield* Effect.all(
-      [collect, provisional ? Effect.void : ensureRates(false)],
+      [
+        collectScoped?.(windowStartMs, retentionCutoffMs).pipe(
+          Effect.map((scannedDirs) => ({ scannedDirs, fromMemory: false })),
+        ) ?? collect,
+        provisional ? Effect.void : ensureRates(false),
+      ],
       { concurrency: 2 },
     );
 
@@ -931,6 +959,7 @@ export const make = Effect.gen(function* () {
       };
     };
     const filesByDir = scannedDirs.map(({ provider, dir, files }) => {
+      if (collectScoped) return files ?? [];
       const retainedFiles = [...(files ?? [])];
       const livePaths = new Set(retainedFiles.map((file) => file.path));
       const isRetained = withinDir(dir);
@@ -1252,7 +1281,148 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const collectThreadDirs = Effect.fn("UsageService.collectThreadDirs")(function* (
+    settings: ServerSettingsValue,
+    sessions: ReadonlyMap<UsageProviderKind, ReadonlySet<string>>,
+    matched: Set<string>,
+    windowStartMs: number,
+    retentionCutoffMs: number,
+  ) {
+    const { dirs } = yield* resolveTranscriptDirs(settings, retentionCutoffMs, false, (provider) =>
+      sessions.has(provider),
+    ).pipe(Effect.provideContext(readerContext));
+    return yield* Effect.forEach(
+      dirs,
+      Effect.fnUntraced(function* (source) {
+        const { dir, provider } = source;
+        const ids = sessions.get(provider)!;
+        const matches = (name: string, filePath: string) => {
+          const stem = name.replace(/\.jsonl(?:\.zst)?$/, "");
+          return (
+            stem !== name &&
+            (ids.has(stem) ||
+              (provider === "codex"
+                ? stem.startsWith("rollout-") && ids.has(stem.slice(-36))
+                : ids.has(path.relative(dir, filePath).split(path.sep)[1] ?? "")))
+          );
+        };
+        const result: ScannedDir = yield* scanTranscriptDir(
+          source,
+          windowStartMs,
+          false,
+          Effect.promise(() => listMatchingTranscriptFiles(dir, windowStartMs, matches)),
+        );
+        // A scoped scan only knows the order of its own files.
+        const { walked: _walked, ...scan } = result;
+        const files = [...(scan.files ?? [])];
+        const live = new Set(files.map((file) => file.path));
+        for (const [filePath, entry] of fileCache) {
+          if (
+            entry.provider === provider &&
+            entry.mtimeMs >= Math.max(windowStartMs, retentionCutoffMs) &&
+            !live.has(filePath) &&
+            isWithinDirectory(filePath, dir) &&
+            matches(path.basename(filePath), filePath)
+          ) {
+            files.push({
+              path: filePath,
+              records: [...entry.records, ...entry.tailRecords],
+              malformedRecords: entry.malformedRecords,
+            });
+          }
+        }
+        return {
+          ...scan,
+          files: files.map((file) => ({
+            ...file,
+            records: file.records.filter((record) => {
+              if (!ids.has(record.sessionId)) return false;
+              matched.add(`${provider}:${record.sessionId}`);
+              return true;
+            }),
+          })),
+        } satisfies ScannedDir;
+      }),
+    );
+  });
+
+  const readThreadCost = Effect.fn("UsageService.readThreadCost")(
+    function* (threadId: ThreadId) {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sessions = new Map<UsageProviderKind, Set<string>>();
+      const pending = new Set([threadId]);
+      let partial = false;
+      for (const id of pending) {
+        const { thread, providerThreads, subagents, attempts } = yield* threads.getThreadRecords(
+          id,
+          ["providerThreads", "subagents", "attempts"],
+        );
+        if (id === threadId && isDelegatedAppThread(thread))
+          return { costUsd: null, partial: false };
+        for (const task of subagents) {
+          if (task.childThreadId !== null) pending.add(task.childThreadId);
+        }
+        const owned = providerThreads.filter((entry) => entry.appThreadId === id);
+        const drivers = new Map(owned.map((entry) => [entry.id, entry.driver]));
+        for (const [driver, nativeId] of [
+          ...owned.map((entry) => [entry.driver, entry.nativeThreadRef?.nativeId] as const),
+          ...attempts.map(
+            (attempt) => [drivers.get(attempt.providerThreadId), attempt.nativeThreadId] as const,
+          ),
+        ]) {
+          if (!nativeId) continue;
+          const provider =
+            driver === "claudeAgent" ? "claude" : driver === "codex" ? "codex" : null;
+          if (provider === null) {
+            partial = true;
+            continue;
+          }
+          const ids = sessions.get(provider) ?? new Set<string>();
+          ids.add(nativeId);
+          sessions.set(provider, ids);
+        }
+      }
+      if (sessions.size === 0) return { costUsd: null, partial };
+      const now = yield* DateTime.now;
+      const settings = yield* readSettings;
+      const matched = new Set<string>();
+      const { summary } = yield* scanSummary(
+        {
+          sinceDay: UsageDay.make("1970-01-01"),
+          untilDay: UsageDay.make(DateTime.formatIso(now).slice(0, 10)),
+          timeZone: "UTC",
+        },
+        settings,
+        false,
+        (windowStartMs, retentionCutoffMs) =>
+          collectThreadDirs(settings, sessions, matched, windowStartMs, retentionCutoffMs),
+      );
+      yield* schedulePersist;
+      const { buckets } = summary;
+      return {
+        costUsd: buckets.some((bucket) => bucket.records > bucket.unpricedRecords)
+          ? buckets.reduce((total, bucket) => total + bucket.costUsd, 0)
+          : null,
+        partial:
+          partial ||
+          matched.size < [...sessions.values()].reduce((size, ids) => size + ids.size, 0) ||
+          buckets.some((bucket) => bucket.unpricedRecords > 0) ||
+          summary.sources.some(
+            (source) => source.status === "partial" || source.status === "failed",
+          ),
+      } satisfies ThreadUsageCost;
+    },
+    Effect.mapError(
+      (cause) =>
+        new UsageReadError({
+          reason: "scanFailed",
+          detail: "Could not read the thread's usage history.",
+          cause,
+        }),
+    ),
+  );
+
+  return { readSummary, readThreadCost, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

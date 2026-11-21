@@ -18,6 +18,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
   UsageDay,
   type UsageSource,
   type UsageSummary,
@@ -43,6 +44,7 @@ import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } fr
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as CodexUsageHistory from "./CodexUsageHistory.ts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
@@ -526,6 +528,74 @@ describe("Codex usage history", () => {
 });
 
 describe("UsageService", () => {
+  it.effect("prices one local thread tree with the same cache rates and dedupe as Usage", () =>
+    Effect.gen(function* () {
+      const { home, settings, transcript } = yield* setup;
+      yield* TestClock.setTime(Date.parse("2026-08-02T12:00:00Z"));
+      const root = ThreadId.make("session-1");
+      const child = ThreadId.make("child");
+      const grandchild = ThreadId.make("grandchild");
+      const dir = NodePath.dirname(transcript);
+      const agents = NodePath.join(dir, root, "subagents");
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(agents, { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(dir, `${root}.jsonl`), claudeCopy(COMPLETE_USAGE));
+        await NodeFSP.writeFile(
+          NodePath.join(agents, "agent-native.jsonl"),
+          claudeCopy(COMPLETE_USAGE) + claudeLine(2, 4),
+        );
+        await NodeFSP.writeFile(
+          NodePath.join(dir, `${grandchild}.jsonl`),
+          claudeLine(3, 7, undefined, grandchild),
+        );
+        await NodeFSP.writeFile(
+          NodePath.join(dir, "fork.jsonl"),
+          claudeLine(4, 100, undefined, "fork"),
+        );
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const estimate = yield* service.readThreadCost(root);
+        const summary = yield* service.readSummary(WINDOW);
+        const forkCost = 10 * 1e-5 + 100 * 5e-5;
+        assert.isFalse(estimate.partial);
+        assert.approximately(estimate.costUsd!, COMPLETE_COST_USD + 20 * 1e-5 + 11 * 5e-5, 1e-10);
+        assert.approximately(estimate.costUsd! + forkCost, summary.buckets[0]!.costUsd, 1e-10);
+        yield* service.awaitPersisted;
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerService({ prefix: "thread-cost", home, settings, ratesDocument: COPY_RATES }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadRecords: (id) =>
+                Effect.succeed({
+                  thread: { lineage: { relationshipToParent: id === root ? null : "subagent" } },
+                  subagents: (id === root
+                    ? [child, child, null]
+                    : id === child
+                      ? [grandchild]
+                      : []
+                  ).map((childThreadId) => ({ childThreadId })),
+                  providerThreads:
+                    id === child
+                      ? []
+                      : [
+                          {
+                            appThreadId: id,
+                            id,
+                            driver: "claudeAgent",
+                            nativeThreadRef: { nativeId: id },
+                          },
+                        ],
+                  attempts: [],
+                } as never),
+            }),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps pricing metadata paired with the rates used during a concurrent refresh", () =>
     Effect.gen(function* () {
       const { home, settings } = yield* setup;
