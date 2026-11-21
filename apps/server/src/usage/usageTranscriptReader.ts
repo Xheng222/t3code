@@ -73,17 +73,31 @@ function fnv1a(buffer: Buffer): number {
   return hash >>> 0;
 }
 
-/** Skips Grok logs without usage; preserves readdir order for first-seen deduplication. */
-export async function listTranscriptFiles(
-  root: string,
-  sinceMs: number,
-  options?: { readonly fileName?: string },
-): Promise<{
+interface TranscriptFileListing {
   readonly files: readonly TranscriptFile[];
   readonly walked: readonly string[];
   readonly failedPaths: number;
-}> {
+}
+
+/** Skips Grok logs without usage; preserves readdir order for first-seen deduplication. */
+export function listTranscriptFiles(
+  root: string,
+  sinceMs: number,
+  options?: { readonly fileName?: string },
+): Promise<TranscriptFileListing> {
   const fileName = options?.fileName;
+  return listMatchingTranscriptFiles(root, sinceMs, (name) =>
+    fileName !== undefined
+      ? name === fileName
+      : name.endsWith(".jsonl") || name.endsWith(".jsonl.zst"),
+  );
+}
+
+export async function listMatchingTranscriptFiles(
+  root: string,
+  sinceMs: number,
+  matches: (name: string, filePath: string) => boolean,
+): Promise<TranscriptFileListing> {
   let failedPaths = 0;
   let reading = 0;
   const waiting: Array<() => void> = [];
@@ -107,13 +121,7 @@ export async function listTranscriptFiles(
       entries.map((entry) => {
         const child = NodePath.join(dir, entry.name);
         if (entry.isDirectory()) return walk(child);
-        return (
-          fileName !== undefined
-            ? entry.name === fileName
-            : entry.name.endsWith(".jsonl") || entry.name.endsWith(".jsonl.zst")
-        )
-          ? [child]
-          : [];
+        return matches(entry.name, child) ? [child] : [];
       }),
     );
     return found.flat();
