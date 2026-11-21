@@ -163,6 +163,12 @@ export const UsageSummary = Schema.Struct({
 });
 export type UsageSummary = typeof UsageSummary.Type;
 
+export const ThreadUsageCost = Schema.Struct({
+  costUsd: Schema.NullOr(Schema.Finite),
+  partial: Schema.Boolean,
+});
+export type ThreadUsageCost = typeof ThreadUsageCost.Type;
+
 export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),
   detail: TrimmedNonEmptyString,
