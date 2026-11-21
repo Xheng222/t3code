@@ -1614,27 +1614,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
 
   const readOpensPullRequestsInRightPanel = useStableCallback(() => routeThreadRef !== null);
-  const handleThreadClick = (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
-    if (isSidebarNestedLinkClick(event.target)) return;
-    const isMac = isMacPlatform(navigator.platform);
-    const isModClick = isMac ? event.metaKey : event.ctrlKey;
-    const threadKey = scopedThreadKey(threadRef);
-    if (isModClick) {
-      event.preventDefault();
-      toggleThreadSelection(threadKey);
-      return;
-    }
-    if (event.shiftKey) {
-      event.preventDefault();
-      rangeSelectTo(threadKey, orderedThreadKeysRef.current);
-      return;
-    }
-    // macOS keeps counting quick clicks across rows, so only the open row's trailing click is a double-click.
-    if (isTrailingDoubleClick(event.detail) && routeThreadKey === threadKey) {
-      return;
-    }
-    navigateToThread(threadRef);
-  };
+  const handleThreadClick = useStableCallback(
+    (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
+      if (isSidebarNestedLinkClick(event.target)) return;
+      const isMac = isMacPlatform(navigator.platform);
+      const isModClick = isMac ? event.metaKey : event.ctrlKey;
+      const threadKey = scopedThreadKey(threadRef);
+      if (isModClick) {
+        event.preventDefault();
+        toggleThreadSelection(threadKey);
+        return;
+      }
+      if (event.shiftKey) {
+        event.preventDefault();
+        rangeSelectTo(threadKey, orderedThreadKeysRef.current);
+        return;
+      }
+      // macOS keeps counting quick clicks across rows, so only the open row's trailing click is a double-click.
+      if (isTrailingDoubleClick(event.detail) && routeThreadKey === threadKey) {
+        return;
+      }
+      navigateToThread(threadRef);
+    },
+  );
 
   // Snapshot navigation before partition mutation; background parks use a null plan.
   const planForwardNavigation = (
@@ -1727,6 +1729,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
     })();
   };
+  const attemptArchive = useStableCallback(async (threadRef: ScopedThreadRef, title: string) => {
+    if (!checkThreadOperations([threadRef])) return;
+    if (confirmThreadArchive) {
+      const api = readLocalApi();
+      if (!api) return;
+      const confirmed = await settlePromise(() =>
+        api.dialogs.confirm(gt('Archive thread "{title}"?', { title })),
+      );
+      if (confirmed._tag === "Failure" || !confirmed.value) return;
+    }
+    let didArchive = false;
+    const result = await archiveThread(threadRef, {
+      onArchived: () => {
+        didArchive = true;
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: didArchive
+            ? gt("Thread archived, but navigation failed")
+            : gt("Failed to archive thread"),
+          description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+        }),
+      );
+    }
+  });
   const attemptUnsnooze = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await unsnoozeThread(threadRef);
@@ -2915,34 +2946,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
-          case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(gt('Archive thread "{title}"?', { title: thread.title })),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
-            });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: didArchive
-                    ? gt("Thread archived, but navigation failed")
-                    : gt("Failed to archive thread"),
-                  description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
-                }),
-              );
-              return;
-            }
-            return;
-          }
+          case "archive":
+            return attemptArchive(threadRef, thread.title);
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -3598,6 +3603,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           onSettle={attemptSettle}
                           onActionSweepStart={startActionSweep}
                           onUnsettle={attemptUnsettle}
+                          onArchive={attemptArchive}
                           onSnooze={attemptSnooze}
                           onUnsnooze={attemptUnsnooze}
                           onUnpin={attemptUnpin}
