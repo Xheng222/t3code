@@ -1796,6 +1796,7 @@ interface TerminalManagerOptions {
   historyByteLimit?: number;
   ptyAdapter: PtyAdapter.PtyAdapter["Service"];
   shellResolver?: () => string;
+  terminalShell?: Effect.Effect<string>;
   env?: NodeJS.ProcessEnv;
   managedBinaryCacheDir?: string;
   managedBinaryToolsDir?: string;
@@ -1899,6 +1900,11 @@ export const make = Effect.fn("TerminalManager.make")(function* (
     ),
     managedBinaryCacheDir: providerStatusCacheDir,
     managedBinaryToolsDir: path.join(baseDir, "tools"),
+    // An unreadable setting must not keep a terminal from opening.
+    terminalShell: serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.terminalShell),
+      Effect.orElseSucceed(() => ""),
+    ),
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
     resolveProviderInstanceEnvironment,
@@ -3022,11 +3028,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       increment(terminalSessionsTotal, { lifecycle: eventType }).pipe(
         Effect.andThen(
           Effect.gen(function* () {
+            const settingShell = options.terminalShell ? yield* options.terminalShell : "";
             const shellCandidates = yield* resolveShellCandidates(
               shellResolver,
               platform,
               baseEnv,
-              session.runtimeEnv?.T3CODE_TERMINAL_SHELL ?? baseEnv.T3CODE_TERMINAL_SHELL,
+              session.runtimeEnv?.T3CODE_TERMINAL_SHELL ??
+                (settingShell || baseEnv.T3CODE_TERMINAL_SHELL),
             ).pipe(
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               withShellPreparationTimeout,

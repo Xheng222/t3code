@@ -1,4 +1,8 @@
 {
+  "698cfe3475b344f7": "シェル",
+  "e80622746ecb9ed8": "terminal shell program executable path nu nushell bash zsh fish pwsh powershell cmd",
+  "61b89db5df7c4b45": "新しいターミナルで起動するプログラムです (nu や pwsh など、引数なしの名前またはフルパス)。空のままにするとデフォルトのシェルを使用します。",
+  "8aef57503db92d2f": "Reset shell to default",
   "e599f2b8b3761d72": "このスレッドと、この環境内にある配下の全サブエージェント",
   "2fb964452626d511": "一部の使用量が不明か、料金を算出できません",
   "3e02681d193dc238": "{first}、{second}",
