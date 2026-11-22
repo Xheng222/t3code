@@ -1,4 +1,8 @@
 {
+  "698cfe3475b344f7": "Shell",
+  "e80622746ecb9ed8": "terminal shell program executable path nu nushell bash zsh fish pwsh powershell cmd",
+  "61b89db5df7c4b45": "Programa que inician los terminales nuevos, como nombre o ruta completa sin argumentos, por ejemplo nu o pwsh. Déjalo vacío para usar el shell predeterminado.",
+  "8aef57503db92d2f": "Reset shell to default",
   "e599f2b8b3761d72": "Este hilo y todos sus subagentes en este entorno",
   "2fb964452626d511": "Faltan datos de uso o parte del uso no tiene precio",
   "3e02681d193dc238": "{first} y {second}",

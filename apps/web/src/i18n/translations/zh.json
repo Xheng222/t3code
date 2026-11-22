@@ -1,4 +1,8 @@
 {
+  "698cfe3475b344f7": "Shell",
+  "e80622746ecb9ed8": "terminal shell program executable path nu nushell bash zsh fish pwsh powershell cmd",
+  "61b89db5df7c4b45": "新终端启动的程序，填写名称或完整路径，不带参数，例如 nu 或 pwsh。留空时使用默认 shell。",
+  "8aef57503db92d2f": "Reset shell to default",
   "e599f2b8b3761d72": "本会话及其在当前环境中的各级子线程",
   "2fb964452626d511": "部分用量缺失或无法计价",
   "3e02681d193dc238": "{first}，{second}",

@@ -241,6 +241,7 @@ const historyLogPath = (logsDir: string, threadId = "thread-1") =>
 
 interface CreateManagerOptions {
   shellResolver?: () => string;
+  terminalShell?: string;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
     readonly hasRunningSubprocess: boolean;
@@ -298,6 +299,9 @@ const createManager = (
           ? { historyByteLimit: options.historyByteLimit }
           : {}),
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
+        ...(options.terminalShell !== undefined
+          ? { terminalShell: Effect.succeed(options.terminalShell) }
+          : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
         ...(options.subprocessInspector !== undefined
           ? { subprocessInspector: options.subprocessInspector }
@@ -2293,12 +2297,13 @@ it.layer(
       const gitBash = String.raw`C:\Program Files\Git\bin\bash.exe`;
       const { manager, ptyAdapter } = yield* createManager(5, {
         env: { T3CODE_TERMINAL_SHELL: gitBash },
+        terminalShell: "nu",
       }).pipe(Effect.provide(layerWithHostPlatform("win32")));
 
       yield* manager.open(openInput({ env: { T3CODE_TERMINAL_SHELL: "" } }));
       yield* manager.open(openInput({ terminalId: "interactive" }));
 
-      expect(ptyAdapter.spawnInputs.map((input) => input.shell)).toEqual(["pwsh.exe", gitBash]);
+      expect(ptyAdapter.spawnInputs.map((input) => input.shell)).toEqual(["pwsh.exe", "nu"]);
     }),
   );
 

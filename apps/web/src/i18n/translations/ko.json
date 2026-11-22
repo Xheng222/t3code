@@ -1,4 +1,8 @@
 {
+  "698cfe3475b344f7": "셸",
+  "e80622746ecb9ed8": "terminal shell program executable path nu nushell bash zsh fish pwsh powershell cmd",
+  "61b89db5df7c4b45": "새 터미널이 시작하는 프로그램으로, nu 또는 pwsh처럼 인수 없이 이름이나 전체 경로로 지정합니다. 기본 셸을 사용하려면 비워 두세요.",
+  "8aef57503db92d2f": "Reset shell to default",
   "e599f2b8b3761d72": "이 스레드 및 현재 환경에서 이 스레드에 속한 모든 하위 에이전트",
   "2fb964452626d511": "일부 사용량이 누락되었거나 비용을 계산할 수 없습니다",
   "3e02681d193dc238": "{first} 및 {second}",

@@ -776,6 +776,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("timestamp clock locale system browser os 12 hour 24 hour")],
   },
   {
+    id: "terminal-shell",
+    title: msg("Shell"),
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: [
+      msg("terminal shell program executable path nu nushell bash zsh fish pwsh powershell cmd"),
+    ],
+  },
+  {
     id: "response-streaming",
     title: msg("Response streaming"),
     to: "/settings/threads",

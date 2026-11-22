@@ -1418,6 +1418,8 @@ export const ServerSettings = Schema.Struct({
   keepAwakeWhileAgentsWork: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /** Off: turns write no Git snapshot, so no changed-file list, turn diff or file revert. */
   recordTurnSnapshots: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Executable for new interactive terminals; empty falls back to `T3CODE_TERMINAL_SHELL`. */
+  terminalShell: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   /** New T3 Connect device keys wait for approval from someone already trusted here. */
   requireConnectDeviceApproval: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1887,6 +1889,7 @@ export const ServerSettingsPatch = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
   recordTurnSnapshots: Schema.optionalKey(Schema.Boolean),
+  terminalShell: Schema.optionalKey(TrimmedString),
   requireConnectDeviceApproval: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   enablePreviewTunnel: Schema.optionalKey(Schema.Boolean),
