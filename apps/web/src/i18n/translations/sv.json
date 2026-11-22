@@ -1,4 +1,8 @@
 {
+  "698cfe3475b344f7": "Skal",
+  "e80622746ecb9ed8": "terminal shell program executable path nu nushell bash zsh fish pwsh powershell cmd",
+  "61b89db5df7c4b45": "Program som nya terminaler startar, som namn eller fullständig sökväg utan argument, till exempel nu eller pwsh. Lämna tomt för att använda standardskalet.",
+  "8aef57503db92d2f": "Reset shell to default",
   "e599f2b8b3761d72": "Den här tråden och alla dess underagenter i den här miljön",
   "2fb964452626d511": "Viss användning saknas eller kan inte prissättas",
   "3e02681d193dc238": "{first} och {second}",
